@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# SwiftPM and Xcode generated files
+.build/
+Packages/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+**/.swiftpm/config/registries.json
+**/.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+
+# Local credentials
+.netrc
