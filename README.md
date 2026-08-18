@@ -21,7 +21,36 @@ KeelTUI is a general-purpose terminal user interface toolkit for Swift applicati
 
 ## Getting started
 
-Add KeelTUI to an executable Swift package, import the module, and start an `Application` with a root view:
+Add KeelTUI to an executable Swift package with the following `Package.swift`:
+
+```swift
+// swift-tools-version: 6.3
+
+import PackageDescription
+
+let package = Package(
+    name: "MyTerminalApp",
+    platforms: [
+        .macOS(.v26)
+    ],
+    dependencies: [
+        .package(
+            url: "https://github.com/uchimanajet7/keel-tui",
+            from: "0.1.0"
+        )
+    ],
+    targets: [
+        .executableTarget(
+            name: "MyTerminalApp",
+            dependencies: [
+                .product(name: "KeelTUI", package: "keel-tui")
+            ]
+        )
+    ]
+)
+```
+
+Import the module and start an `Application` with a root view:
 
 ```swift
 import KeelTUI
@@ -40,8 +69,6 @@ Run the executable from a terminal emulator:
 ```bash
 swift run
 ```
-
-Versioned Swift Package Manager coordinates will be documented when the first release is published.
 
 ## Examples
 

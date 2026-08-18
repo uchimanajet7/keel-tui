@@ -8,7 +8,36 @@ This generated documentation can serve as a reference for the currently supporte
 
 ## Getting started
 
-Create an executable Swift package and add KeelTUI as a dependency. KeelTUI uses Swift tools version 6.0 and targets macOS 26 or later. Import KeelTUI and compose terminal interfaces with the supported views, modifiers, and terminal primitives.
+KeelTUI uses Swift tools version 6.3 and targets macOS 26 or later. Add KeelTUI to an executable Swift package with the following `Package.swift`:
+
+```swift
+// swift-tools-version: 6.3
+
+import PackageDescription
+
+let package = Package(
+  name: "MyTerminalApp",
+  platforms: [
+    .macOS(.v26)
+  ],
+  dependencies: [
+    .package(
+      url: "https://github.com/uchimanajet7/keel-tui",
+      from: "0.1.0"
+    )
+  ],
+  targets: [
+    .executableTarget(
+      name: "MyTerminalApp",
+      dependencies: [
+        .product(name: "KeelTUI", package: "keel-tui")
+      ]
+    )
+  ]
+)
+```
+
+Import KeelTUI and compose terminal interfaces with the supported views, modifiers, and terminal primitives.
 
 ```swift
 import KeelTUI
