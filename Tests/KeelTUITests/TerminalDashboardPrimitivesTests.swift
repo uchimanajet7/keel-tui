@@ -282,7 +282,8 @@ final class TerminalDashboardPrimitivesTests: XCTestCase {
         let modal = TerminalModal(
             title: "Confirm",
             lines: ["Primary line", "Secondary line", "Tertiary line"],
-            preferredWidth: 24
+            preferredWidth: 24,
+            minimumWidth: 24
         )
         let frame = modal.frame(in: canvas.size)
 
@@ -378,6 +379,433 @@ final class TerminalDashboardPrimitivesTests: XCTestCase {
         XCTAssertEqual(snapshot.style(column: 17, line: 0), .plain)
         XCTAssertTrue(snapshot.ansiText.contains(EscapeSequence.setForegroundColor(.red)))
         XCTAssertTrue(snapshot.ansiText.contains(EscapeSequence.enableDim))
+    }
+
+    func testTerminalStatusBarCompactsAndOmitsWholeItemsByRetentionPriority() {
+        let highShortcutStyle = TerminalStyle(foreground: .red, isBold: true)
+        let highLabelStyle = TerminalStyle(foreground: .brightRed)
+        let lowShortcutStyle = TerminalStyle(foreground: .cyan)
+        let lowLabelStyle = TerminalStyle(isDim: true)
+        let status = TerminalStatusBar(items: [
+            TerminalStatusBarItem(
+                shortcut: "a",
+                label: "Alpha",
+                compactLabel: "A",
+                retentionPriority: 10,
+                shortcutStyle: highShortcutStyle,
+                labelStyle: highLabelStyle
+            ),
+            TerminalStatusBarItem(
+                shortcut: "b",
+                label: "Beta",
+                compactLabel: "B",
+                shortcutStyle: lowShortcutStyle,
+                labelStyle: lowLabelStyle
+            ),
+            TerminalStatusBarItem(
+                shortcut: "c",
+                label: "Gamma",
+                compactLabel: "G"
+            ),
+            TerminalStatusBarItem(shortcut: "h", label: "Hidden", isVisible: false),
+            TerminalStatusBarItem(shortcut: "d", label: "Disabled", isEnabled: false),
+        ])
+
+        XCTAssertEqual(status.text(width: 26), " a Alpha  b Beta  c Gamma ")
+        XCTAssertEqual(
+            status.text(width: 25),
+            TerminalDisplayWidth.padRight(" a Alpha  b Beta  c G ", toWidth: 25)
+        )
+        XCTAssertEqual(
+            status.text(width: 15),
+            " a A  b B  c G "
+        )
+        XCTAssertEqual(
+            status.text(width: 14),
+            TerminalDisplayWidth.padRight(" a A  b B ", toWidth: 14)
+        )
+        XCTAssertEqual(
+            status.text(width: 9),
+            TerminalDisplayWidth.padRight(" a A ", toWidth: 9)
+        )
+        XCTAssertEqual(status.text(width: 4), String(repeating: " ", count: 4))
+        XCTAssertEqual(status.text(width: 1), " ")
+        XCTAssertEqual(status.text(width: 0), "")
+
+        for width in [26, 25, 15, 14, 9, 4, 1, 0] {
+            var canvas = TerminalCanvas(size: TerminalSize(width: width, height: 1))
+            status.draw(
+                on: &canvas,
+                frame: TerminalFrame(column: 0, line: 0, width: width, height: 1)
+            )
+
+            XCTAssertEqual(canvas.snapshot().line(0), status.text(width: width))
+        }
+
+        var compactCanvas = TerminalCanvas(size: TerminalSize(width: 14, height: 1))
+        status.draw(
+            on: &compactCanvas,
+            frame: TerminalFrame(column: 0, line: 0, width: 14, height: 1)
+        )
+        let compactSnapshot = compactCanvas.snapshot()
+
+        XCTAssertEqual(compactSnapshot.style(column: 1, line: 0), highShortcutStyle)
+        XCTAssertEqual(compactSnapshot.style(column: 3, line: 0), highLabelStyle)
+        XCTAssertEqual(compactSnapshot.style(column: 6, line: 0), lowShortcutStyle)
+        XCTAssertEqual(compactSnapshot.style(column: 8, line: 0), lowLabelStyle)
+        XCTAssertFalse(compactSnapshot.text.contains("c"))
+        XCTAssertFalse(compactSnapshot.text.contains("G"))
+    }
+
+    func testTerminalStatusBarMeasuresWideItemsWithoutDrawingFragments() {
+        let status = TerminalStatusBar(items: [
+            TerminalStatusBarItem(shortcut: "日", label: "本")
+        ])
+
+        XCTAssertEqual(status.text(width: 7), " 日 本 ")
+        XCTAssertEqual(TerminalDisplayWidth.width(of: status.text(width: 7)), 7)
+        XCTAssertEqual(status.text(width: 6), String(repeating: " ", count: 6))
+
+        var canvas = TerminalCanvas(size: TerminalSize(width: 6, height: 1))
+        status.draw(on: &canvas, frame: TerminalFrame(column: 0, line: 0, width: 6, height: 1))
+
+        XCTAssertEqual(canvas.snapshot().line(0), status.text(width: 6))
+        XCTAssertFalse(canvas.snapshot().text.contains("日"))
+        XCTAssertFalse(canvas.snapshot().text.contains("本"))
+    }
+
+    func testTerminalStatusBarIncludesSeparatorsOnlyWhenBothItemsFit() {
+        let status = TerminalStatusBar(items: [
+            TerminalStatusBarItem(shortcut: "q", label: "A"),
+            TerminalStatusBarItem(shortcut: "w", label: "B"),
+        ])
+
+        XCTAssertEqual(status.text(width: 10), " q A  w B ")
+        XCTAssertEqual(
+            status.text(width: 9),
+            TerminalDisplayWidth.padRight(" q A ", toWidth: 9)
+        )
+        XCTAssertEqual(status.text(width: 5), " q A ")
+        XCTAssertEqual(status.text(width: 4), String(repeating: " ", count: 4))
+        XCTAssertFalse(status.text(width: 9).contains("  w"))
+        XCTAssertFalse(status.text(width: 9).contains("w"))
+        XCTAssertFalse(status.text(width: 9).contains("B"))
+    }
+
+    func testTerminalTextLayoutWrapsWordsTokensNewlinesAndBoundaryWidths() {
+        XCTAssertEqual(
+            TerminalTextLayout.wrap("hello world", width: 5).map(\.text),
+            ["hello", "world"]
+        )
+        XCTAssertEqual(
+            TerminalTextLayout.wrap("abcdefgh", width: 3).map(\.text),
+            ["abc", "def", "gh"]
+        )
+        XCTAssertEqual(
+            TerminalTextLayout.wrap("one\n\ntwo\n", width: 10).map(\.text),
+            ["one", "", "two", ""]
+        )
+        XCTAssertEqual(
+            TerminalTextLayout.wrap("日本語", width: 4).map(\.text),
+            ["日本", "語"]
+        )
+        XCTAssertEqual(
+            TerminalTextLayout.wrap("A👩‍💻B", width: 2).map(\.text),
+            ["A", "👩‍💻", "B"]
+        )
+        XCTAssertEqual(
+            TerminalTextLayout.wrap("e\u{301}x", width: 1).map(\.text),
+            ["e\u{301}", "x"]
+        )
+        XCTAssertEqual(TerminalTextLayout.wrap("text", width: 0).map(\.text), [""])
+        XCTAssertEqual(TerminalTextLayout.wrap("日", width: 1).map(\.text), ["日"])
+        XCTAssertEqual(TerminalDisplayWidth.width(of: "👩‍💻"), 2)
+        XCTAssertEqual(TerminalDisplayWidth.width(of: "e\u{301}"), 1)
+        XCTAssertEqual(TerminalTextLayout.wrap("e\u{301}", width: 1)[0].text.count, 1)
+    }
+
+    func testTerminalTextLayoutPreservesStylesAndContinuationIndent() {
+        let primaryStyle = TerminalStyle(foreground: .red)
+        let accentStyle = TerminalStyle(foreground: .cyan, isBold: true)
+        let indentStyle = TerminalStyle(isDim: true)
+        let input = TerminalModalLine(
+            segments: [
+                TerminalStyledTextSegment("ab ", style: primaryStyle),
+                TerminalStyledTextSegment("日本👩‍💻e\u{301}", style: accentStyle),
+            ],
+            continuationIndent: "↳ ",
+            continuationIndentStyle: indentStyle
+        )
+
+        let wrapped = TerminalTextLayout.wrap([input], width: 6)
+
+        XCTAssertEqual(wrapped.map(\.text), ["ab", "↳ 日本", "↳ 👩‍💻e\u{301}"])
+        XCTAssertEqual(wrapped[0].segments, [
+            TerminalStyledTextSegment("ab", style: primaryStyle)
+        ])
+        XCTAssertEqual(wrapped[1].segments, [
+            TerminalStyledTextSegment("↳ ", style: indentStyle),
+            TerminalStyledTextSegment("日本", style: accentStyle),
+        ])
+        XCTAssertEqual(wrapped[2].segments, [
+            TerminalStyledTextSegment("↳ ", style: indentStyle),
+            TerminalStyledTextSegment("👩‍💻e\u{301}", style: accentStyle),
+        ])
+
+        let oversizedIndent = TerminalModalLine(text: "ab", continuationIndent: "----")
+        XCTAssertEqual(
+            TerminalTextLayout.wrap([oversizedIndent], width: 1).map(\.text),
+            ["a", "b"]
+        )
+    }
+
+    func testTerminalModalWrapsBeforeSizingAndNormalizesItsViewport() {
+        let firstModal = TerminalModal(
+            title: "Help",
+            lines: ["alpha beta gamma delta"],
+            preferredWidth: 12,
+            minimumWidth: 12,
+            maximumHeight: 5
+        )
+        let lastModal = TerminalModal(
+            title: "Help",
+            lines: ["alpha beta gamma delta"],
+            preferredWidth: 12,
+            minimumWidth: 12,
+            maximumHeight: 5,
+            scrollOffset: 99
+        )
+        let size = TerminalSize(width: 20, height: 10)
+        let first = firstModal.layout(in: size)
+        let last = lastModal.layout(in: size)
+
+        XCTAssertEqual(first.frame, TerminalFrame(column: 4, line: 2, width: 12, height: 5))
+        XCTAssertEqual(first.naturalHeight, 6)
+        XCTAssertEqual(first.contentFrame.width, 8)
+        XCTAssertEqual(first.contentFrame.height, 3)
+        XCTAssertEqual(first.totalLineCount, 4)
+        XCTAssertEqual(first.maximumScrollOffset, 1)
+        XCTAssertEqual(first.scrollOffset, 0)
+        XCTAssertEqual(first.visibleRange, 0 ..< 3)
+        XCTAssertEqual(first.visibleLines.map(\.text), ["alpha", "beta", "gamma"])
+        XCTAssertEqual(last.scrollOffset, 1)
+        XCTAssertEqual(last.visibleRange, 1 ..< 4)
+        XCTAssertEqual(last.visibleLines.map(\.text), ["beta", "gamma", "delta"])
+
+        var canvas = TerminalCanvas(size: size)
+        for line in 0 ..< size.height {
+            canvas.draw(String(repeating: "x", count: size.width), column: 0, line: line)
+        }
+        lastModal.draw(on: &canvas)
+        let snapshot = canvas.snapshot()
+        let firstContentRow = String(
+            snapshot.line(last.contentFrame.line)
+                .dropFirst(last.frame.column)
+                .prefix(last.frame.width)
+        )
+
+        XCTAssertTrue(snapshot.line(last.frame.line).contains("Help"))
+        XCTAssertTrue(snapshot.line(last.frame.maxLine).contains("┗"))
+        XCTAssertTrue(firstContentRow.contains("beta"))
+        XCTAssertFalse(firstContentRow.contains("x"))
+        XCTAssertEqual(snapshot.line(0), String(repeating: "x", count: size.width))
+        XCTAssertEqual(lastModal.scrollOffset, 99)
+
+        lastModal.draw(on: &canvas)
+        XCTAssertEqual(canvas.snapshot(), snapshot)
+    }
+
+    func testTerminalModalHeightBoundsStayInsideTheAvailableArea() {
+        let modal = TerminalModal(
+            title: "Bounds",
+            lines: ["one"],
+            preferredWidth: 30,
+            preferredHeight: 8,
+            minimumHeight: 4,
+            maximumHeight: 6
+        )
+        let area = TerminalFrame(column: 3, line: 2, width: 10, height: 3)
+        let layout = modal.layout(in: area)
+
+        XCTAssertEqual(layout.frame, area)
+        XCTAssertEqual(layout.naturalHeight, 3)
+        XCTAssertEqual(layout.frame.height, 3)
+        XCTAssertGreaterThanOrEqual(layout.frame.minColumn, area.minColumn)
+        XCTAssertLessThanOrEqual(layout.frame.maxColumn, area.maxColumn)
+        XCTAssertGreaterThanOrEqual(layout.frame.minLine, area.minLine)
+        XCTAssertLessThanOrEqual(layout.frame.maxLine, area.maxLine)
+
+        let roomySize = TerminalSize(width: 30, height: 12)
+        let minimumLayout = TerminalModal(
+            title: "Minimum",
+            lines: ["one"],
+            preferredWidth: 12,
+            minimumWidth: 12,
+            minimumHeight: 5,
+            maximumHeight: 8
+        ).layout(in: roomySize)
+        let preferredLayout = TerminalModal(
+            title: "Preferred",
+            lines: ["one"],
+            preferredWidth: 12,
+            minimumWidth: 12,
+            preferredHeight: 6,
+            minimumHeight: 3,
+            maximumHeight: 8
+        ).layout(in: roomySize)
+        let emptyLayout = modal.layout(
+            in: TerminalFrame(column: 3, line: 2, width: -1, height: -1)
+        )
+
+        XCTAssertEqual(minimumLayout.naturalHeight, 3)
+        XCTAssertEqual(minimumLayout.frame.height, 5)
+        XCTAssertEqual(preferredLayout.naturalHeight, 3)
+        XCTAssertEqual(preferredLayout.frame.height, 6)
+        XCTAssertEqual(emptyLayout.frame.width, 0)
+        XCTAssertEqual(emptyLayout.frame.height, 0)
+        XCTAssertGreaterThanOrEqual(emptyLayout.contentFrame.width, 0)
+        XCTAssertGreaterThanOrEqual(emptyLayout.contentFrame.height, 0)
+    }
+
+    func testTerminalModalViewportReachesFirstMiddleAndLastRows() {
+        let lines = (0 ..< 6).map { "row \($0)" }
+        func layout(offset: Int) -> TerminalModalLayout {
+            TerminalModal(
+                title: "Rows",
+                lines: lines,
+                preferredWidth: 12,
+                minimumWidth: 12,
+                maximumHeight: 5,
+                scrollOffset: offset
+            ).layout(in: TerminalSize(width: 20, height: 10))
+        }
+
+        let first = layout(offset: 0)
+        let middle = layout(offset: 2)
+        let last = layout(offset: .max)
+        let reached = Set(
+            (first.visibleLines + middle.visibleLines + last.visibleLines).map(\.text)
+        )
+
+        XCTAssertEqual(first.visibleRange, 0 ..< 3)
+        XCTAssertEqual(middle.visibleRange, 2 ..< 5)
+        XCTAssertEqual(last.visibleRange, 3 ..< 6)
+        XCTAssertEqual(last.maximumScrollOffset, 3)
+        XCTAssertEqual(last.scrollOffset, 3)
+        XCTAssertEqual(reached, Set(lines))
+    }
+
+    func testKeyBindingPresentationFeedsStatusAndGroupedHelpFromOneDescriptorSet() {
+        let shortcutStyle = TerminalStyle(foreground: .yellow, isBold: true)
+        let descriptionStyle = TerminalStyle(foreground: .white)
+        let bindings = [
+            TerminalKeyBindingPresentation(
+                id: "quit",
+                shortcut: "q",
+                description: "Quit",
+                compactDescription: "Close",
+                groupID: "general",
+                groupTitle: "General",
+                retentionPriority: 10,
+                shortcutStyle: shortcutStyle,
+                descriptionStyle: descriptionStyle
+            ),
+            TerminalKeyBindingPresentation(
+                id: "refresh",
+                shortcut: "r",
+                description: "Refresh",
+                groupID: "general",
+                groupTitle: "General",
+                isEnabled: false,
+                shortcutStyle: TerminalStyle(foreground: .cyan),
+                descriptionStyle: TerminalStyle(isDim: true)
+            ),
+            TerminalKeyBindingPresentation(
+                id: "move",
+                shortcut: "↑↓",
+                description: "Move selection",
+                groupID: "navigation",
+                groupTitle: "Navigation"
+            ),
+            TerminalKeyBindingPresentation(
+                id: "hidden",
+                shortcut: "x",
+                description: "Hidden",
+                groupID: "general",
+                groupTitle: "General",
+                isVisible: false
+            ),
+        ]
+
+        let includingDisabled = bindings.statusBarItems(disabledVisibility: .include)
+        let excludingDisabled = bindings.statusBarItems(disabledVisibility: .exclude)
+        let help = TerminalBindingHelp.lines(
+            from: bindings,
+            width: 24,
+            disabledVisibility: .include
+        )
+        let enabledHelp = TerminalBindingHelp.lines(
+            from: bindings,
+            width: 24,
+            disabledVisibility: .exclude
+        )
+
+        XCTAssertEqual(includingDisabled.map(\.label), ["Quit", "Refresh", "Move selection"])
+        XCTAssertEqual(excludingDisabled.map(\.label), ["Quit", "Move selection"])
+        XCTAssertEqual(includingDisabled[0].compactLabel, "Close")
+        XCTAssertEqual(includingDisabled[0].retentionPriority, 10)
+        XCTAssertEqual(includingDisabled[0].shortcutStyle, shortcutStyle)
+        XCTAssertEqual(includingDisabled[0].labelStyle, descriptionStyle)
+        XCTAssertEqual(includingDisabled[2].shortcut, "↑↓")
+        XCTAssertEqual(
+            help.map(\.text),
+            ["General", "q   Quit", "r   Refresh", "Navigation", "↑↓  Move selection"]
+        )
+        XCTAssertEqual(
+            enabledHelp.map(\.text),
+            ["General", "q   Quit", "Navigation", "↑↓  Move selection"]
+        )
+        XCTAssertEqual(help[1].segments.first?.style, shortcutStyle)
+        XCTAssertEqual(help[1].segments.last?.style, descriptionStyle)
+        XCTAssertFalse(help.map(\.text).contains { $0.contains("Hidden") })
+
+        var focusSpecificBindings = bindings
+        focusSpecificBindings[0].isVisible = false
+        focusSpecificBindings[2].isEnabled = false
+        XCTAssertEqual(
+            focusSpecificBindings
+                .statusBarItems(disabledVisibility: .exclude)
+                .map(\.label),
+            []
+        )
+        XCTAssertEqual(
+            focusSpecificBindings
+                .statusBarItems(disabledVisibility: .include)
+                .map(\.label),
+            ["Refresh", "Move selection"]
+        )
+
+        let wrappedHelp = TerminalBindingHelp.lines(
+            from: [
+                TerminalKeyBindingPresentation(
+                    id: "open",
+                    shortcut: "enter",
+                    description: "Open selected resource",
+                    groupID: "actions",
+                    groupTitle: ""
+                )
+            ],
+            width: 16,
+            disabledVisibility: .exclude
+        )
+
+        XCTAssertEqual(
+            wrappedHelp.map(\.text),
+            ["enter  Open", "       selected", "       resource"]
+        )
+        XCTAssertTrue(wrappedHelp.allSatisfy {
+            TerminalDisplayWidth.width(of: $0.text) <= 16
+        })
     }
 }
 

@@ -177,6 +177,9 @@ public struct TerminalFocusCoordinator: Equatable {
 public struct TerminalStatusBarItem: Equatable {
     public var shortcut: String
     public var label: String
+    public var compactLabel: String?
+    public var retentionPriority: Int
+    public var isVisible: Bool
     public var isEnabled: Bool
     public var shortcutStyle: TerminalStyle?
     public var labelStyle: TerminalStyle?
@@ -184,12 +187,18 @@ public struct TerminalStatusBarItem: Equatable {
     public init(
         shortcut: String,
         label: String,
+        compactLabel: String? = nil,
+        retentionPriority: Int = 0,
+        isVisible: Bool = true,
         isEnabled: Bool = true,
         shortcutStyle: TerminalStyle? = nil,
         labelStyle: TerminalStyle? = nil
     ) {
         self.shortcut = shortcut
         self.label = label
+        self.compactLabel = compactLabel
+        self.retentionPriority = retentionPriority
+        self.isVisible = isVisible
         self.isEnabled = isEnabled
         self.shortcutStyle = shortcutStyle
         self.labelStyle = labelStyle
@@ -197,6 +206,24 @@ public struct TerminalStatusBarItem: Equatable {
 }
 
 public struct TerminalStatusBar: Equatable {
+    private struct ResolvedItem {
+        var item: TerminalStatusBarItem
+        var label: String
+
+        var width: Int {
+            TerminalDisplayWidth.width(of: item.shortcut) + 1 + TerminalDisplayWidth.width(of: label)
+        }
+    }
+
+    private struct ResolvedLayout {
+        var items: [ResolvedItem]
+
+        var content: String {
+            guard !items.isEmpty else { return "" }
+            return " " + items.map { "\($0.item.shortcut) \($0.label)" }.joined(separator: "  ") + " "
+        }
+    }
+
     public var items: [TerminalStatusBarItem]
     public var shortcutStyle: TerminalStyle
     public var labelStyle: TerminalStyle
@@ -215,13 +242,12 @@ public struct TerminalStatusBar: Equatable {
     }
 
     public func text(width: Int) -> String {
-        let visibleItems = items.filter(\.isEnabled)
-        let content = visibleItems.map { "\($0.shortcut) \($0.label)" }.joined(separator: "  ")
-        return TerminalDisplayWidth.padRight(" \(content) ", toWidth: width)
+        guard width > 0 else { return "" }
+        return TerminalDisplayWidth.padRight(resolvedLayout(width: width).content, toWidth: width)
     }
 
     public func draw(on canvas: inout TerminalCanvas, frame: TerminalFrame) {
-        guard frame.height > 0 else { return }
+        guard frame.height > 0, frame.width > 0 else { return }
         canvas.draw(
             String(repeating: " ", count: max(0, frame.width)),
             column: frame.column,
@@ -230,32 +256,93 @@ public struct TerminalStatusBar: Equatable {
             style: backgroundStyle
         )
 
-        var column = frame.column
-        column += drawSegment(" ", style: backgroundStyle, on: &canvas, frame: frame, column: column)
+        let layout = resolvedLayout(width: frame.width)
+        guard !layout.items.isEmpty else { return }
 
-        let visibleItems = items.filter(\.isEnabled)
-        for (index, item) in visibleItems.enumerated() {
+        var column = frame.column + 1
+        for (index, resolved) in layout.items.enumerated() {
             if index > 0 {
-                column += drawSegment("  ", style: backgroundStyle, on: &canvas, frame: frame, column: column)
+                canvas.draw("  ", column: column, line: frame.line, maxWidth: 2, style: backgroundStyle)
+                column += 2
             }
-            column += drawSegment(item.shortcut, style: item.shortcutStyle ?? shortcutStyle, on: &canvas, frame: frame, column: column)
-            column += drawSegment(" ", style: backgroundStyle, on: &canvas, frame: frame, column: column)
-            column += drawSegment(item.label, style: item.labelStyle ?? labelStyle, on: &canvas, frame: frame, column: column)
+            let shortcutWidth = TerminalDisplayWidth.width(of: resolved.item.shortcut)
+            canvas.draw(
+                resolved.item.shortcut,
+                column: column,
+                line: frame.line,
+                maxWidth: shortcutWidth,
+                style: resolved.item.shortcutStyle ?? shortcutStyle
+            )
+            column += shortcutWidth
+            canvas.draw(" ", column: column, line: frame.line, maxWidth: 1, style: backgroundStyle)
+            column += 1
+            let labelWidth = TerminalDisplayWidth.width(of: resolved.label)
+            canvas.draw(
+                resolved.label,
+                column: column,
+                line: frame.line,
+                maxWidth: labelWidth,
+                style: resolved.item.labelStyle ?? labelStyle
+            )
+            column += labelWidth
         }
     }
 
-    private func drawSegment(
-        _ text: String,
-        style: TerminalStyle,
-        on canvas: inout TerminalCanvas,
-        frame: TerminalFrame,
-        column: Int
-    ) -> Int {
-        let remainingWidth = frame.column + frame.width - column
-        guard remainingWidth > 0 else { return 0 }
-        let segmentWidth = TerminalDisplayWidth.width(of: text)
-        let width = min(segmentWidth, remainingWidth)
-        canvas.draw(text, column: column, line: frame.line, maxWidth: width, style: style)
-        return width
+    private func resolvedLayout(width: Int) -> ResolvedLayout {
+        guard width > 0 else { return ResolvedLayout(items: []) }
+
+        let candidates = items.filter { $0.isVisible && $0.isEnabled }
+        guard !candidates.isEmpty else { return ResolvedLayout(items: []) }
+
+        var labels = candidates.map(\.label)
+        var retained = Array(repeating: true, count: candidates.count)
+        let overflowOrder = candidates.indices.sorted { lhs, rhs in
+            if candidates[lhs].retentionPriority == candidates[rhs].retentionPriority {
+                return lhs > rhs
+            }
+            return candidates[lhs].retentionPriority < candidates[rhs].retentionPriority
+        }
+
+        func measuredWidth() -> Int {
+            let indices = candidates.indices.filter { retained[$0] }
+            guard !indices.isEmpty else { return 0 }
+            let itemWidth = indices.reduce(0) { partial, index in
+                partial
+                    + TerminalDisplayWidth.width(of: candidates[index].shortcut)
+                    + 1
+                    + TerminalDisplayWidth.width(of: labels[index])
+            }
+            return 2 + itemWidth + max(0, indices.count - 1) * 2
+        }
+
+        if measuredWidth() > width {
+            for index in overflowOrder {
+                guard let compactLabel = candidates[index].compactLabel else { continue }
+                guard TerminalDisplayWidth.width(of: compactLabel) < TerminalDisplayWidth.width(of: labels[index]) else {
+                    continue
+                }
+                labels[index] = compactLabel
+                if measuredWidth() <= width {
+                    break
+                }
+            }
+        }
+
+        if measuredWidth() > width {
+            for index in overflowOrder {
+                retained[index] = false
+                if measuredWidth() <= width {
+                    break
+                }
+            }
+        }
+
+        guard measuredWidth() <= width else { return ResolvedLayout(items: []) }
+        return ResolvedLayout(
+            items: candidates.indices.compactMap { index in
+                guard retained[index] else { return nil }
+                return ResolvedItem(item: candidates[index], label: labels[index])
+            }
+        )
     }
 }

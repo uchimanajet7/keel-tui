@@ -64,6 +64,44 @@ To run the app, open a terminal emulator such as macOS's Terminal app, change to
 swift run
 ```
 
+## Terminal presentation primitives
+
+`TerminalStatusBar` measures complete shortcut-and-label items, including outer padding and separators. Full labels are preferred, then lower `retentionPriority` items use compact labels, then lower-priority items are omitted. Later items lose ties. The text and canvas paths use the same resolved item layout.
+
+`TerminalTextLayout` preserves Swift `Character` boundaries, explicit and empty logical lines, styles, and continuation indents. Its `wordBoundary` policy prefers whitespace and hard-wraps unbroken tokens. It is not a complete Unicode line-breaking algorithm. At width zero, each logical input line becomes one empty output line. An over-wide continuation indent is truncated to reserve one content cell. A single `Character` wider than that cell remains atomic, and `TerminalCanvas` draws it only when its complete cell width fits.
+
+`TerminalModal` wraps after choosing its content width. `layout(in:)` exposes the natural height, wrapped and visible lines, visible range, normalized scroll offset, and maximum scroll offset. Rendering does not handle input; the application supplies the scroll state.
+
+`TerminalKeyBindingPresentation` is a display-only descriptor shared by status and grouped-help adapters. Both adapters require an explicit disabled-binding visibility policy.
+
+```swift
+let bindings = [
+  TerminalKeyBindingPresentation(
+    id: "help",
+    shortcut: "?",
+    description: "Show help",
+    compactDescription: "Help",
+    groupID: "general",
+    groupTitle: "General",
+    retentionPriority: 50
+  )
+]
+
+let status = TerminalStatusBar(
+  items: bindings.statusBarItems(disabledVisibility: .exclude)
+)
+let help = TerminalModal(
+  title: "Help",
+  styledLines: TerminalBindingHelp.lines(
+    from: bindings,
+    width: 40,
+    disabledVisibility: .include
+  ),
+  preferredWidth: 44,
+  maximumHeight: 18
+)
+```
+
 ## Topics
 
 ### Application
@@ -138,3 +176,21 @@ swift run
 ### Debugging
 
 - ``log(_:terminator:)``
+
+### Terminal primitives
+
+- ``TerminalCanvas``
+- ``TerminalDisplayWidth``
+- ``TerminalStatusBar``
+- ``TerminalStatusBarItem``
+- ``TerminalTextLayout``
+- ``TerminalTextWrapPolicy``
+- ``TerminalStyledTextSegment``
+- ``TerminalModal``
+- ``TerminalModalLine``
+- ``TerminalModalLayout``
+- ``TerminalKeyBindingPresentation``
+- ``TerminalKeyBindingPresentationAdapter``
+- ``TerminalBindingHelp``
+- ``TerminalDisabledBindingVisibility``
+- ``TerminalBindingHelpKeyColumnScope``

@@ -70,6 +70,53 @@ Run the executable from a terminal emulator:
 swift run
 ```
 
+## Reusable terminal presentation primitives
+
+`TerminalStatusBar` resolves complete items before it draws. It measures display cells for both outer padding and inter-item separators, shows full labels when they fit, then compacts lower-priority items, and finally omits lower-priority items. Larger `retentionPriority` values are retained longer; when priorities match, later items compact or disappear first. A shortcut, its separating space, and its selected label are always one indivisible item.
+
+`TerminalTextLayout` wraps styled `Character` values without splitting extended grapheme clusters. It preserves explicit newlines and empty lines, carries segment styles across wraps, and supports a styled continuation indent. The `.wordBoundary` policy prefers whitespace boundaries and hard-wraps long tokens; it is deliberately a practical terminal policy rather than a complete Unicode line-breaking implementation. At width zero, each logical input line resolves to one empty output line. A continuation indent is truncated to reserve one content cell. If a single `Character` is wider than the available width, layout keeps it atomic and `TerminalCanvas` leaves it undrawn unless all of its cells fit.
+
+`TerminalModal.layout(in:)` chooses the modal width, wraps at the resulting content width, applies minimum, preferred, and maximum height bounds, and returns normalized viewport metadata. The renderer is stateless: the application owns key handling and passes the desired `scrollOffset` back into the modal.
+
+Define shortcuts once with `TerminalKeyBindingPresentation`, then adapt the same descriptors for a status bar and grouped help. Each consumer must explicitly choose whether disabled bindings are included.
+
+```swift
+let bindings = [
+    TerminalKeyBindingPresentation(
+        id: "refresh",
+        shortcut: "r",
+        description: "Refresh data",
+        compactDescription: "Refresh",
+        groupID: "general",
+        groupTitle: "General",
+        retentionPriority: 20
+    ),
+    TerminalKeyBindingPresentation(
+        id: "quit",
+        shortcut: "q",
+        description: "Quit",
+        groupID: "general",
+        groupTitle: "General",
+        retentionPriority: 100
+    )
+]
+
+let status = TerminalStatusBar(
+    items: bindings.statusBarItems(disabledVisibility: .exclude)
+)
+let helpLines = TerminalBindingHelp.lines(
+    from: bindings,
+    width: 40,
+    disabledVisibility: .include
+)
+let help = TerminalModal(
+    title: "Help",
+    styledLines: helpLines,
+    preferredWidth: 44,
+    maximumHeight: 18
+)
+```
+
 ## Examples
 
 The repository includes four executable example packages:
