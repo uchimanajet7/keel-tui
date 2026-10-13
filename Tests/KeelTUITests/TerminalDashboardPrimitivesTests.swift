@@ -5,7 +5,8 @@ final class TerminalDashboardPrimitivesTests: XCTestCase {
     func testDefaultMultiPaneLayoutFits80x24And120x40() {
         for size in [TerminalSize(width: 80, height: 24), TerminalSize(width: 120, height: 40)] {
             let layout = DashboardFixtureState.layout(size: size, focusedPane: .services)
-            let snapshot = DashboardFixtureState.fixture().render(size: size)
+            var state = DashboardFixtureState.fixture()
+            let snapshot = state.render(size: size)
 
             XCTAssertFalse(layout.hasOverlaps)
             XCTAssertEqual(snapshot.lines.count, size.height)
@@ -87,7 +88,7 @@ final class TerminalDashboardPrimitivesTests: XCTestCase {
     }
 
     func testResizeRedrawsCleanly() {
-        let state = DashboardFixtureState.fixture()
+        var state = DashboardFixtureState.fixture()
 
         let compact = state.render(size: TerminalSize(width: 80, height: 24))
         let expanded = state.render(size: TerminalSize(width: 120, height: 40))
@@ -581,7 +582,7 @@ final class TerminalDashboardPrimitivesTests: XCTestCase {
 
         XCTAssertEqual(first.frame, TerminalFrame(column: 4, line: 2, width: 12, height: 5))
         XCTAssertEqual(first.naturalHeight, 6)
-        XCTAssertEqual(first.contentFrame.width, 8)
+        XCTAssertEqual(first.contentFrame.width, 7)
         XCTAssertEqual(first.contentFrame.height, 3)
         XCTAssertEqual(first.totalLineCount, 4)
         XCTAssertEqual(first.maximumScrollOffset, 1)
@@ -887,7 +888,7 @@ private struct DashboardFixtureState: Equatable {
         logs.append(String(format: "log %03d  refresh completed without blocking input", logs.lines.count + 1))
     }
 
-    func render(size: TerminalSize) -> TerminalSnapshot {
+    mutating func render(size: TerminalSize) -> TerminalSnapshot {
         let layout = Self.layout(size: size, focusedPane: focus.activeSection)
         var canvas = TerminalCanvas(size: size)
 
@@ -916,7 +917,7 @@ private struct DashboardFixtureState: Equatable {
         }
     }
 
-    private func drawServices(on canvas: inout TerminalCanvas, in frame: TerminalFrame?) {
+    private mutating func drawServices(on canvas: inout TerminalCanvas, in frame: TerminalFrame?) {
         guard let frame else { return }
         let rows = services.visibleRows(height: frame.height)
         for (rowOffset, row) in rows.enumerated() {
@@ -930,7 +931,7 @@ private struct DashboardFixtureState: Equatable {
         }
     }
 
-    private func drawEvents(on canvas: inout TerminalCanvas, in frame: TerminalFrame?) {
+    private mutating func drawEvents(on canvas: inout TerminalCanvas, in frame: TerminalFrame?) {
         guard let frame else { return }
         let lines = events.visibleLines(height: frame.height)
         for (lineOffset, line) in lines.enumerated() {
@@ -943,7 +944,7 @@ private struct DashboardFixtureState: Equatable {
         }
     }
 
-    private func drawLogs(on canvas: inout TerminalCanvas, in frame: TerminalFrame?) {
+    private mutating func drawLogs(on canvas: inout TerminalCanvas, in frame: TerminalFrame?) {
         guard let frame else { return }
         let lines = logs.visibleLines(height: frame.height)
         for (lineOffset, line) in lines.enumerated() {

@@ -95,9 +95,11 @@ class Renderer {
     }
 
     private func updateAttributes(_ attributes: CellAttributes) {
-        if currentAttributes.bold != attributes.bold {
+        if currentAttributes.bold != attributes.bold || currentAttributes.dim != attributes.dim {
+            // SGR 22 resets both bold and dim, so restore the complete intensity state.
+            write(EscapeSequence.disableBold)
             if attributes.bold { write(EscapeSequence.enableBold) }
-            else { write(EscapeSequence.disableBold) }
+            if attributes.dim { write(EscapeSequence.enableDim) }
         }
         if currentAttributes.italic != attributes.italic {
             if attributes.italic { write(EscapeSequence.enableItalic) }

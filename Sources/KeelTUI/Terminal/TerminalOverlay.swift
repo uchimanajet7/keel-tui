@@ -56,36 +56,29 @@ public struct TerminalModalLine: Equatable {
 }
 
 public struct TerminalModalLayout: Equatable {
-    public var frame: TerminalFrame
-    public var contentFrame: TerminalFrame
-    public var wrappedLines: [TerminalModalLine]
-    public var visibleLines: [TerminalModalLine]
-    public var naturalHeight: Int
-    public var totalLineCount: Int
-    public var visibleRange: Range<Int>
-    public var scrollOffset: Int
-    public var maximumScrollOffset: Int
+    public let frame: TerminalFrame
+    /// The shared layout; its state uses wrapped display rows.
+    public let scroll: TerminalScrollLayout
+    public let wrappedLines: [TerminalModalLine]
+    public let naturalHeight: Int
+    public var contentFrame: TerminalFrame { scroll.contentFrame }
+    public var visibleLines: [TerminalModalLine] { Array(wrappedLines[visibleRange]) }
+    public var totalLineCount: Int { scroll.state.contentLength }
+    public var visibleRange: Range<Int> { scroll.state.visibleRange }
+    public var scrollOffset: Int { scroll.state.offset }
+    public var maximumScrollOffset: Int { scroll.state.maximumOffset }
 
+    /// Creates layout metadata whose visible rows derive from the shared state.
     public init(
         frame: TerminalFrame,
-        contentFrame: TerminalFrame,
+        scroll: TerminalScrollLayout,
         wrappedLines: [TerminalModalLine],
-        visibleLines: [TerminalModalLine],
-        naturalHeight: Int,
-        totalLineCount: Int,
-        visibleRange: Range<Int>,
-        scrollOffset: Int,
-        maximumScrollOffset: Int
+        naturalHeight: Int
     ) {
         self.frame = frame
-        self.contentFrame = contentFrame
+        self.scroll = scroll
         self.wrappedLines = wrappedLines
-        self.visibleLines = visibleLines
         self.naturalHeight = naturalHeight
-        self.totalLineCount = totalLineCount
-        self.visibleRange = visibleRange
-        self.scrollOffset = scrollOffset
-        self.maximumScrollOffset = maximumScrollOffset
     }
 }
 
@@ -113,6 +106,8 @@ public struct TerminalModal: Equatable {
     public var contentStyle: TerminalStyle
     public var focused: Bool
     public var clearsRowsAcrossArea: Bool
+    /// Configures the indicator independently from focus and modal styling.
+    public var scrollbar: TerminalScrollbar
 
     public init(
         title: String,
@@ -129,7 +124,8 @@ public struct TerminalModal: Equatable {
         style: TerminalBoxStyle = .unicode,
         contentStyle: TerminalStyle = .plain,
         focused: Bool = true,
-        clearsRowsAcrossArea: Bool = true
+        clearsRowsAcrossArea: Bool = true,
+        scrollbar: TerminalScrollbar = TerminalScrollbar()
     ) {
         self.title = title
         self.styledLines = lines.map { TerminalModalLine(text: $0, style: contentStyle) }
@@ -146,6 +142,7 @@ public struct TerminalModal: Equatable {
         self.contentStyle = contentStyle
         self.focused = focused
         self.clearsRowsAcrossArea = clearsRowsAcrossArea
+        self.scrollbar = scrollbar
     }
 
     public init(
@@ -163,7 +160,8 @@ public struct TerminalModal: Equatable {
         style: TerminalBoxStyle = .unicode,
         contentStyle: TerminalStyle = .plain,
         focused: Bool = true,
-        clearsRowsAcrossArea: Bool = true
+        clearsRowsAcrossArea: Bool = true,
+        scrollbar: TerminalScrollbar = TerminalScrollbar()
     ) {
         self.title = title
         self.styledLines = styledLines
@@ -180,6 +178,7 @@ public struct TerminalModal: Equatable {
         self.contentStyle = contentStyle
         self.focused = focused
         self.clearsRowsAcrossArea = clearsRowsAcrossArea
+        self.scrollbar = scrollbar
     }
 
     public func frame(in size: TerminalSize) -> TerminalFrame {
@@ -197,28 +196,23 @@ public struct TerminalModal: Equatable {
     public func layout(in area: TerminalFrame) -> TerminalModalLayout {
         guard !area.isEmpty else {
             let emptyFrame = TerminalFrame(column: area.column, line: area.line, width: 0, height: 0)
+            let wrappedLines = TerminalTextLayout.wrap(styledLines, width: 0)
             return TerminalModalLayout(
                 frame: emptyFrame,
-                contentFrame: emptyFrame,
-                wrappedLines: [],
-                visibleLines: [],
-                naturalHeight: 0,
-                totalLineCount: 0,
-                visibleRange: 0 ..< 0,
-                scrollOffset: 0,
-                maximumScrollOffset: 0
+                scroll: scrollbar.layout(in: emptyFrame, contentLength: wrappedLines.count, offset: scrollOffset),
+                wrappedLines: wrappedLines,
+                naturalHeight: 0
             )
         }
 
         let boundedMinimumWidth = min(maximumWidth, minimumWidth)
         let titleWidth = TerminalDisplayWidth.width(of: title) + 4
         let contentWidth = styledLines.map { TerminalDisplayWidth.width(of: $0.text) }.max() ?? 0
-        let naturalWidth = max(boundedMinimumWidth, titleWidth, contentWidth + horizontalPadding * 2 + 2)
+        let naturalWidth = max(boundedMinimumWidth, titleWidth,
+                               contentWidth + horizontalPadding * 2 + 2 + (scrollbar.gutter == .stable ? 1 : 0))
         let requestedWidth = preferredWidth ?? naturalWidth
         let width = min(area.width, min(maximumWidth, max(boundedMinimumWidth, requestedWidth)))
 
-        let wrappedContentWidth = max(0, width - horizontalPadding * 2 - 2)
-        let wrappedLines = TerminalTextLayout.wrap(styledLines, width: wrappedContentWidth)
         let titleContentRows: Int
         switch style.titlePlacement {
         case .border:
@@ -226,38 +220,35 @@ public struct TerminalModal: Equatable {
         case .firstContentLine:
             titleContentRows = 1
         }
-        let naturalHeight = max(3, wrappedLines.count + verticalPadding * 2 + 2 + titleContentRows)
-        let boundedMinimumHeight = min(maximumHeight, minimumHeight)
-        let requestedHeight = preferredHeight ?? naturalHeight
-        let height = min(area.height, min(maximumHeight, max(boundedMinimumHeight, requestedHeight)))
+        func resolve(reservingGutter: Bool) -> TerminalModalLayout {
+            let wrappedContentWidth = max(0, width - horizontalPadding * 2 - 2 - (reservingGutter ? 1 : 0))
+            let wrappedLines = TerminalTextLayout.wrap(styledLines, width: wrappedContentWidth)
+            let naturalHeight = max(3, wrappedLines.count + verticalPadding * 2 + 2 + titleContentRows)
+            let boundedMinimumHeight = min(maximumHeight, minimumHeight)
+            let height = min(area.height, min(maximumHeight, max(boundedMinimumHeight, preferredHeight ?? naturalHeight)))
+            let frame = TerminalFrame(
+                column: area.column + max(0, (area.width - width) / 2),
+                line: area.line + max(0, (area.height - height) / 2), width: width, height: height
+            )
+            let body = frame.contentFrame(titlePlacement: style.titlePlacement)
+                .insetBy(columns: horizontalPadding, lines: verticalPadding)
+            return TerminalModalLayout(
+                frame: frame, scroll: scrollbar.layout(in: body, contentLength: wrappedLines.count, offset: scrollOffset),
+                wrappedLines: wrappedLines, naturalHeight: naturalHeight
+            )
+        }
+        let first = resolve(reservingGutter: scrollbar.gutter == .stable)
+        if scrollbar.gutter == .automatic, first.scroll.scrollbarFrame.width > 0 {
+            return resolve(reservingGutter: true)
+        }
+        return first
+    }
 
-        let frame = TerminalFrame(
-            column: area.column + max(0, (area.width - width) / 2),
-            line: area.line + max(0, (area.height - height) / 2),
-            width: width,
-            height: height
-        )
-        let contentFrame = frame
-            .contentFrame(titlePlacement: style.titlePlacement)
-            .insetBy(columns: horizontalPadding, lines: verticalPadding)
-        let visibleHeight = max(0, contentFrame.height)
-        let maximumScrollOffset = max(0, wrappedLines.count - visibleHeight)
-        let normalizedScrollOffset = min(max(0, scrollOffset), maximumScrollOffset)
-        let visibleEnd = min(wrappedLines.count, normalizedScrollOffset + visibleHeight)
-        let visibleRange = normalizedScrollOffset ..< visibleEnd
-        let visibleLines = visibleRange.isEmpty ? [] : Array(wrappedLines[visibleRange])
-
-        return TerminalModalLayout(
-            frame: frame,
-            contentFrame: contentFrame,
-            wrappedLines: wrappedLines,
-            visibleLines: visibleLines,
-            naturalHeight: naturalHeight,
-            totalLineCount: wrappedLines.count,
-            visibleRange: visibleRange,
-            scrollOffset: normalizedScrollOffset,
-            maximumScrollOffset: maximumScrollOffset
-        )
+    /// Moves from the resolved display-row position at the current available size.
+    public mutating func scroll(_ movement: TerminalScrollMovement, in area: TerminalFrame) {
+        var state = layout(in: area).scroll.state
+        state.move(movement)
+        scrollOffset = state.offset
     }
 
     public func draw(on canvas: inout TerminalCanvas) {
@@ -274,6 +265,7 @@ public struct TerminalModal: Equatable {
             : modalFrame
         canvas.clear(frame: clearFrame)
         canvas.drawBox(frame: modalFrame, title: title, focused: focused, style: style)
+        scrollbar.draw(on: &canvas, frame: layout.scroll.scrollbarFrame, state: layout.scroll.state)
 
         let contentFrame = layout.contentFrame
         guard contentFrame.width > 0, contentFrame.height > 0 else { return }
