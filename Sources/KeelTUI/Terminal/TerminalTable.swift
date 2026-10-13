@@ -58,6 +58,8 @@ public struct TerminalTable: Equatable, Sendable {
     public var selectedRowStyle: TerminalStyle
     public var selectionMarker: String
     public var selectionGutterWidth: Int
+    /// The body scrollbar; the fixed header is excluded from its viewport.
+    public var scrollbar: TerminalScrollbar
 
     public init(
         columns: [TerminalTableColumn],
@@ -67,7 +69,8 @@ public struct TerminalTable: Equatable, Sendable {
         selectedRowIndex: Int? = nil,
         selectedRowStyle: TerminalStyle = TerminalStyle(isReversed: true),
         selectionMarker: String = "›",
-        selectionGutterWidth: Int = 2
+        selectionGutterWidth: Int = 2,
+        scrollbar: TerminalScrollbar = TerminalScrollbar()
     ) {
         self.columns = columns
         self.rows = rows
@@ -77,30 +80,44 @@ public struct TerminalTable: Equatable, Sendable {
         self.selectedRowStyle = selectedRowStyle
         self.selectionMarker = selectionMarker
         self.selectionGutterWidth = selectionGutterWidth
+        self.scrollbar = scrollbar
     }
 
+    /// Resolves record-row units below the fixed header, independently of selection.
+    public func layout(in frame: TerminalFrame, rowOffset: Int = 0, maxRows: Int? = nil) -> TerminalScrollLayout {
+        let height = max(0, frame.height - 1)
+        let body = TerminalFrame(column: frame.column, line: frame.line + min(1, frame.height),
+                                 width: columns.isEmpty ? 0 : frame.width, height: min(height, max(0, maxRows ?? height)))
+        return scrollbar.layout(in: body, contentLength: rows.count, offset: rowOffset)
+    }
+
+    /// Draws the fixed header and normalized body, returning the state for subsequent movement.
+    @discardableResult
     public func draw(
         on canvas: inout TerminalCanvas,
         frame: TerminalFrame,
         rowOffset: Int = 0,
         maxRows: Int? = nil
-    ) {
-        guard !frame.isEmpty, !columns.isEmpty else { return }
+    ) -> TerminalScrollLayout {
+        let layout = layout(in: frame, rowOffset: rowOffset, maxRows: maxRows)
+        guard !frame.isEmpty, !columns.isEmpty else { return layout }
 
-        drawHeader(on: &canvas, frame: frame)
+        canvas.clear(frame: frame)
+        let content = TerminalFrame(column: frame.column, line: frame.line,
+                                    width: layout.contentFrame.width, height: frame.height)
+        drawHeader(on: &canvas, frame: content)
 
-        let availableRows = max(0, min(frame.height - 1, maxRows ?? frame.height - 1))
-        guard availableRows > 0 else { return }
-
-        for (visibleOffset, rowIndex) in rows.indices.dropFirst(max(0, rowOffset)).prefix(availableRows).enumerated() {
+        for (visibleOffset, rowIndex) in layout.state.visibleRange.enumerated() {
             drawRow(
                 rows[rowIndex],
                 rowIndex: rowIndex,
                 on: &canvas,
-                frame: frame,
+                frame: content,
                 line: frame.line + 1 + visibleOffset
             )
         }
+        scrollbar.draw(on: &canvas, frame: layout.scrollbarFrame, state: layout.state)
+        return layout
     }
 
     private func drawHeader(on canvas: inout TerminalCanvas, frame: TerminalFrame) {

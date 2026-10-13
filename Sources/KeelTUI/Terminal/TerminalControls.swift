@@ -12,18 +12,32 @@ public struct TerminalListRow: Equatable {
     }
 }
 
+/// Caller-owned single-row items with independent selection and viewing positions.
 public struct TerminalSelectableList: Equatable {
+    /// Item text; drawing clips each item to one row at the usable content width.
     public var rows: [String]
+    /// The selected item index; call `revealSelection()` after assigning it to reveal it.
     public var selectedIndex: Int
+    /// The first viewed item, normalized and saved when measuring or moving.
     public var scrollOffset: Int
+    /// Indicator configuration; each list item occupies one unwrapped display row.
+    public var scrollbar: TerminalScrollbar
+    private var viewportHeight = 0
+    private var selectionNeedsReveal = true
 
-    public init(rows: [String], selectedIndex: Int = 0, scrollOffset: Int = 0) {
+    /// Creates a list; a nonzero initial selection is revealed unless an offset was supplied.
+    public init(rows: [String], selectedIndex: Int = 0, scrollOffset: Int = 0,
+                scrollbar: TerminalScrollbar = TerminalScrollbar()) {
         self.rows = rows
         self.selectedIndex = rows.isEmpty ? 0 : min(max(0, selectedIndex), rows.count - 1)
         self.scrollOffset = max(0, scrollOffset)
+        self.scrollbar = scrollbar
+        self.selectionNeedsReveal = selectedIndex != 0 && scrollOffset == 0
     }
 
-    public mutating func handle(_ key: TerminalKey) {
+    /// Moves selection using the most recently measured viewport, or the supplied frame.
+    public mutating func handle(_ key: TerminalKey, in frame: TerminalFrame? = nil) {
+        if let frame { _ = layout(in: frame) }
         switch key {
         case .arrowDown:
             moveSelection(by: 1)
@@ -34,9 +48,9 @@ public struct TerminalSelectableList: Equatable {
         case .end:
             moveToEnd()
         case .pageDown:
-            moveSelection(by: max(1, visibleStep))
+            moveSelection(by: viewportHeight)
         case .pageUp:
-            moveSelection(by: -max(1, visibleStep))
+            moveSelection(by: -viewportHeight)
         case .character(let character) where character == "j":
             moveSelection(by: 1)
         case .character(let character) where character == "k":
@@ -46,75 +60,140 @@ public struct TerminalSelectableList: Equatable {
         }
     }
 
+    /// Moves selection without wrapping, and reveals the resulting selected item.
     public mutating func moveSelection(by delta: Int) {
-        guard !rows.isEmpty else {
-            selectedIndex = 0
-            scrollOffset = 0
-            return
-        }
-        selectedIndex = min(max(0, selectedIndex + delta), rows.count - 1)
+        var selection = TerminalScrollState(contentLength: rows.count, viewportLength: 1, offset: selectedIndex)
+        selection.move(.units(delta))
+        selectedIndex = selection.offset
+        revealSelection()
     }
 
+    /// Selects and reveals the first item.
     public mutating func moveToStart() {
-        selectedIndex = rows.isEmpty ? 0 : 0
+        selectedIndex = 0
+        revealSelection()
     }
 
+    /// Selects and reveals the last item.
     public mutating func moveToEnd() {
         selectedIndex = max(0, rows.count - 1)
+        revealSelection()
     }
 
-    public func visibleRows(height: Int) -> [TerminalListRow] {
-        guard height > 0, !rows.isEmpty else { return [] }
-        let offset = normalizedScrollOffset(height: height)
-        let end = min(rows.count, offset + height)
-        return (offset ..< end).map {
+    /// Slices single-row items and saves the normalized offset for the next input.
+    public mutating func visibleRows(height: Int) -> [TerminalListRow] {
+        let state = resolve(height: height)
+        return state.visibleRange.map {
             TerminalListRow(index: $0, text: rows[$0], isSelected: $0 == selectedIndex)
         }
     }
 
-    public func normalizedScrollOffset(height: Int) -> Int {
-        guard height > 0, !rows.isEmpty else { return 0 }
-        var offset = min(max(0, scrollOffset), max(0, rows.count - height))
-        if selectedIndex < offset {
-            offset = selectedIndex
-        } else if selectedIndex >= offset + height {
-            offset = selectedIndex - height + 1
-        }
-        return offset
+    /// Normalizes and saves the viewing position without changing selection.
+    public mutating func normalizedScrollOffset(height: Int) -> Int {
+        resolve(height: height).offset
     }
 
-    private var visibleStep: Int {
-        max(1, rows.isEmpty ? 1 : min(10, rows.count))
+    /// Resolves the content frame and viewport in single-row item units.
+    public mutating func layout(in frame: TerminalFrame) -> TerminalScrollLayout {
+        var layout = scrollbar.layout(in: frame, contentLength: rows.count, offset: scrollOffset)
+        layout.state = resolve(height: layout.state.viewportLength)
+        return layout
+    }
+
+    /// Moves only the viewing position, leaving the selected item unchanged.
+    public mutating func scroll(_ movement: TerminalScrollMovement, in frame: TerminalFrame? = nil) {
+        selectionNeedsReveal = false
+        var state = frame.map { layout(in: $0).state } ?? resolve(height: viewportHeight)
+        state.move(movement)
+        scrollOffset = state.offset
+    }
+
+    /// Explicitly requests that the selected row become visible.
+    public mutating func revealSelection() {
+        selectionNeedsReveal = true
+        _ = resolve(height: viewportHeight)
+    }
+
+    /// Draws clipped single-row items and an indicator in separate columns.
+    @discardableResult
+    public mutating func draw(on canvas: inout TerminalCanvas, frame: TerminalFrame,
+                              style: TerminalStyle = .plain,
+                              selectedStyle: TerminalStyle = TerminalStyle(isReversed: true)) -> TerminalScrollLayout {
+        let layout = layout(in: frame)
+        canvas.clear(frame: frame)
+        for (row, index) in layout.state.visibleRange.enumerated() {
+            let text = rows[index].split(maxSplits: 1, omittingEmptySubsequences: false,
+                                         whereSeparator: { $0.isNewline }).first.map(String.init) ?? ""
+            canvas.draw(text, column: layout.contentFrame.column, line: layout.contentFrame.line + row,
+                        maxWidth: layout.contentFrame.width, style: index == selectedIndex ? selectedStyle : style)
+        }
+        scrollbar.draw(on: &canvas, frame: layout.scrollbarFrame, state: layout.state)
+        return layout
+    }
+
+    private mutating func resolve(height: Int) -> TerminalScrollState {
+        viewportHeight = max(0, height)
+        selectedIndex = min(max(0, selectedIndex), max(0, rows.count - 1))
+        var state = TerminalScrollState(contentLength: rows.count, viewportLength: viewportHeight, offset: scrollOffset)
+        if selectionNeedsReveal, viewportHeight > 0 {
+            if !rows.isEmpty { state.move(.reveal(selectedIndex ..< selectedIndex + 1)) }
+            selectionNeedsReveal = false
+        }
+        scrollOffset = state.offset
+        return state
     }
 }
 
-public struct TerminalTextViewport: Equatable {
-    public var lines: [String]
-    public var scrollOffset: Int
+/// Wrapped text and the shared layout used to slice and draw it.
+public struct TerminalTextViewportLayout: Equatable {
+    /// All display rows after wrapping at the final content width.
+    public let wrappedLines: [String]
+    /// Content/gutter geometry and the normalized display-row state.
+    public let scroll: TerminalScrollLayout
+    /// The display rows in the normalized visible range.
+    public var visibleLines: [String] { Array(wrappedLines[scroll.state.visibleRange]) }
+}
 
-    public init(lines: [String], scrollOffset: Int = 0) {
+/// A caller-owned viewport that wraps plain text or slices already laid-out rows.
+public struct TerminalTextViewport: Equatable {
+    /// Logical input lines for frame-based wrapping, or display rows for height-only slicing.
+    public var lines: [String]
+    /// The first display row, normalized and saved when measuring or moving.
+    public var scrollOffset: Int
+    /// Indicator and gutter configuration for frame-based wrapping and drawing.
+    public var scrollbar: TerminalScrollbar
+    private var viewportHeight = 0
+    private var lastFrame: TerminalFrame?
+
+    /// Creates a viewport; measure or draw it before requesting viewport-sized movement.
+    public init(lines: [String], scrollOffset: Int = 0, scrollbar: TerminalScrollbar = TerminalScrollbar()) {
         self.lines = lines
         self.scrollOffset = max(0, scrollOffset)
+        self.scrollbar = scrollbar
     }
 
+    /// Appends content without automatically following its end.
     public mutating func append(_ line: String) {
         lines.append(line)
     }
 
-    public mutating func handle(_ key: TerminalKey) {
+    /// Applies navigation after resolving the current content and viewport dimensions.
+    /// Pass a frame on resize; otherwise the most recent measurement is reused.
+    public mutating func handle(_ key: TerminalKey, in frame: TerminalFrame? = nil) {
+        if let frame { _ = layout(in: frame) }
         switch key {
         case .arrowDown:
             scroll(by: 1)
         case .arrowUp:
             scroll(by: -1)
         case .home:
-            scrollOffset = 0
+            scroll(.start)
         case .end:
-            scrollOffset = max(0, lines.count - 1)
+            scroll(.end)
         case .pageDown:
-            scroll(by: 10)
+            scroll(.pages(1))
         case .pageUp:
-            scroll(by: -10)
+            scroll(.pages(-1))
         case .character(let character) where character == "j":
             scroll(by: 1)
         case .character(let character) where character == "k":
@@ -124,19 +203,64 @@ public struct TerminalTextViewport: Equatable {
         }
     }
 
+    /// Moves by display rows using the last measured viewport.
     public mutating func scroll(by delta: Int) {
-        scrollOffset = max(0, scrollOffset + delta)
+        scroll(.units(delta))
     }
 
+    /// Moves in display rows using the last measurement, optionally resolving a new frame first.
+    public mutating func scroll(_ movement: TerminalScrollMovement, in frame: TerminalFrame? = nil) {
+        var state: TerminalScrollState
+        if let frame = frame ?? lastFrame {
+            state = layout(in: frame).scroll.state
+        } else {
+            state = TerminalScrollState(contentLength: lines.count, viewportLength: viewportHeight, offset: scrollOffset)
+        }
+        state.move(movement)
+        scrollOffset = state.offset
+    }
+
+    /// Moves to the end of already laid-out rows, replacing any remembered wrapped frame.
     public mutating func scrollToBottom(height: Int) {
-        scrollOffset = max(0, lines.count - max(0, height))
+        _ = visibleLines(height: height)
+        scroll(.end)
     }
 
-    public func visibleLines(height: Int) -> [String] {
-        guard height > 0, !lines.isEmpty else { return [] }
-        let offset = min(max(0, scrollOffset), max(0, lines.count - height))
-        let end = min(lines.count, offset + height)
-        return Array(lines[offset ..< end])
+    /// Slices already laid-out rows without wrapping and saves the normalized offset.
+    public mutating func visibleLines(height: Int) -> [String] {
+        lastFrame = nil
+        viewportHeight = max(0, height)
+        let state = TerminalScrollState(contentLength: lines.count, viewportLength: viewportHeight, offset: scrollOffset)
+        scrollOffset = state.offset
+        return Array(lines[state.visibleRange])
+    }
+
+    /// Allocates the gutter before wrapping and saves the normalized display-row offset.
+    public mutating func layout(in frame: TerminalFrame) -> TerminalTextViewportLayout {
+        var wrapped: [String] = []
+        let input = lines.map { TerminalModalLine(text: $0) }
+        let layout = scrollbar.layout(in: frame, offset: scrollOffset) { width in
+            wrapped = TerminalTextLayout.wrap(input, width: width).map(\.text)
+            return wrapped.count
+        }
+        lastFrame = frame
+        viewportHeight = layout.state.viewportLength
+        scrollOffset = layout.state.offset
+        return TerminalTextViewportLayout(wrappedLines: wrapped, scroll: layout)
+    }
+
+    /// Draws wrapped rows and the indicator without overlapping the content.
+    @discardableResult
+    public mutating func draw(on canvas: inout TerminalCanvas, frame: TerminalFrame,
+                              style: TerminalStyle = .plain) -> TerminalTextViewportLayout {
+        let layout = layout(in: frame)
+        canvas.clear(frame: frame)
+        for (row, text) in layout.visibleLines.enumerated() {
+            canvas.draw(text, column: layout.scroll.contentFrame.column, line: layout.scroll.contentFrame.line + row,
+                        maxWidth: layout.scroll.contentFrame.width, style: style)
+        }
+        scrollbar.draw(on: &canvas, frame: layout.scroll.scrollbarFrame, state: layout.scroll.state)
+        return layout
     }
 }
 

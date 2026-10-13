@@ -4,7 +4,9 @@ A general-purpose terminal user interface toolkit for Swift applications on macO
 
 ## Documentation
 
-This generated documentation can serve as a reference for the currently supported functionality. Also check out `README.md` and the included example projects.
+This reference describes KeelTUI 0.3.0. Also check out the
+[README](https://github.com/uchimanajet7/keel-tui/blob/0.3.0/README.md) and the included
+[example projects](https://github.com/uchimanajet7/keel-tui/tree/0.3.0/Examples).
 
 ## Getting started
 
@@ -23,7 +25,7 @@ let package = Package(
   dependencies: [
     .package(
       url: "https://github.com/uchimanajet7/keel-tui",
-      from: "0.1.0"
+      from: "0.3.0"
     )
   ],
   targets: [
@@ -70,7 +72,14 @@ swift run
 
 `TerminalTextLayout` preserves Swift `Character` boundaries, explicit and empty logical lines, styles, and continuation indents. Its `wordBoundary` policy prefers whitespace and hard-wraps unbroken tokens. It is not a complete Unicode line-breaking algorithm. At width zero, each logical input line becomes one empty output line. An over-wide continuation indent is truncated to reserve one content cell. A single `Character` wider than that cell remains atomic, and `TerminalCanvas` draws it only when its complete cell width fits.
 
-`TerminalModal` wraps after choosing its content width. `layout(in:)` exposes the natural height, wrapped and visible lines, visible range, normalized scroll offset, and maximum scroll offset. Rendering does not handle input; the application supplies the scroll state.
+`TerminalModal` wraps after allocating its content width and scrollbar gutter. `layout(in:)` exposes the natural height, wrapped and visible lines, and shared scroll state. Rendering does not handle input; the application supplies movement through `scroll(_:in:)` or the returned state.
+
+See <doc:Scrolling> for shared range and movement calculations, immediate overflow indicators,
+stable gutter allocation, state ownership, and migration from the 0.2.0 viewport APIs.
+Version 0.3.0 adds these capabilities to text viewports, selectable lists, modals,
+tables, and declarative scroll views. Height-only slicing now saves the normalized
+offset and requires mutable component values; `TerminalModalLayout` metadata is
+read-only and constructed from a shared scroll layout.
 
 `TerminalKeyBindingPresentation` is a display-only descriptor shared by status and grouped-help adapters. Both adapters require an explicit disabled-binding visibility policy.
 
@@ -126,7 +135,8 @@ let help = TerminalModal(
 - ``View/frame(width:height:alignment:)``
 - ``View/frame(minWidth:maxWidth:minHeight:maxHeight:alignment:)``
 - ``View/padding(_:)``
-- ``View/padding(_:_:)``
+- ``View/padding(_:_:)-43d9i``
+- ``View/padding(_:_:)-8kowh``
 - ``GeometryReader``
 - ``Alignment``
 - ``HorizontalAlignment``
@@ -179,6 +189,19 @@ let help = TerminalModal(
 
 ### Terminal primitives
 
+- <doc:Scrolling>
+- ``TerminalScrollState``
+- ``TerminalScrollMovement``
+- ``TerminalScrollLayout``
+- ``TerminalScrollbar``
+- ``TerminalScrollbarStyle``
+- ``TerminalScrollbarGeometry``
+- ``TerminalScrollbarVisibility``
+- ``TerminalScrollbarGutter``
+- ``TerminalTextViewport``
+- ``TerminalTextViewportLayout``
+- ``TerminalSelectableList``
+- ``TerminalTable``
 - ``TerminalCanvas``
 - ``TerminalDisplayWidth``
 - ``TerminalStatusBar``
