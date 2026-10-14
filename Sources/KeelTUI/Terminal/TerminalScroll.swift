@@ -85,9 +85,9 @@ public enum TerminalScrollbarVisibility: Equatable, Sendable {
 
 /// How the content and scrollbar share the available width.
 public enum TerminalScrollbarGutter: Equatable, Sendable {
-    /// Allocate a column only when a visible scrollbar is needed.
+    /// Allocate the scrollbar column and content spacing only when a visible bar is needed.
     case automatic
-    /// Always reserve a column, so visibility changes cannot change wrapping.
+    /// Always reserve the scrollbar column and content spacing, even when hidden.
     case stable
 }
 
@@ -155,14 +155,22 @@ public struct TerminalScrollbarGeometry: Equatable, Sendable {
     }
 }
 
-/// The disjoint content and scrollbar frames, with one resolved scroll state.
+/// Disjoint content, spacing, and scrollbar frames, with one resolved scroll state.
 public struct TerminalScrollLayout: Equatable {
-    /// The frame available to content after allocating the gutter.
+    /// The final frame for content measurement, drawing, and clipping.
     public let contentFrame: TerminalFrame
+    /// Blank cells between content and the scrollbar, using the surface's normal background.
+    /// Empty when no gutter is reserved; shrinks before content in narrow frames.
+    public let spacingFrame: TerminalFrame
     /// The reserved scrollbar column, even if its indicator is hidden.
     public let scrollbarFrame: TerminalFrame
     /// The normalized measurements used by content, movement, and drawing.
     public internal(set) var state: TerminalScrollState
+
+    var gutterFrame: TerminalFrame {
+        TerminalFrame(column: spacingFrame.column, line: spacingFrame.line,
+                      width: spacingFrame.width + scrollbarFrame.width, height: spacingFrame.height)
+    }
 }
 
 /// Layout and rendering for a vertical scrollbar without input or selection policy.
@@ -171,6 +179,10 @@ public struct TerminalScrollbar: Equatable, Sendable {
     public var visibility: TerminalScrollbarVisibility
     /// The column reservation policy, independent of visibility.
     public var gutter: TerminalScrollbarGutter
+    /// Requested blank display cells between content and the one-column scrollbar.
+    /// Defaults to zero for unchanged widths and wrapping. Negative values act as zero.
+    /// Spacing is reserved with the gutter and shrinks to leave one content cell when possible.
+    public var contentSpacing: Int
     /// Glyphs and styles used to render the indicator.
     public var style: TerminalScrollbarStyle
 
@@ -178,14 +190,16 @@ public struct TerminalScrollbar: Equatable, Sendable {
     public init(
         visibility: TerminalScrollbarVisibility = .whenNeeded,
         gutter: TerminalScrollbarGutter = .automatic,
+        contentSpacing: Int = 0,
         style: TerminalScrollbarStyle = TerminalScrollbarStyle()
     ) {
         self.visibility = visibility
         self.gutter = gutter
+        self.contentSpacing = max(0, contentSpacing)
         self.style = style
     }
 
-    /// Resolves a fixed-row content layout, excluding the gutter from its width.
+    /// Resolves a fixed-row layout, excluding the scrollbar and spacing from content.
     public func layout(in frame: TerminalFrame, contentLength: Int, offset: Int = 0) -> TerminalScrollLayout {
         layout(in: frame, offset: offset) { _ in contentLength }
     }
@@ -195,26 +209,65 @@ public struct TerminalScrollbar: Equatable, Sendable {
     public func layout(
         in frame: TerminalFrame, offset: Int = 0, measure: (Int) -> Int
     ) -> TerminalScrollLayout {
-        var reserved = gutter == .stable
-        var content = contentFrame(in: frame, reservingGutter: reserved)
-        var length = max(0, measure(content.width))
-        if !reserved, visibility == .whenNeeded, length > content.height {
-            reserved = true
-            content = contentFrame(in: frame, reservingGutter: true)
-            length = max(0, measure(content.width))
+        let first = layout(in: frame, offset: offset, reservingGutter: gutter == .stable, measure: measure)
+        if gutter == .automatic, visibility == .whenNeeded, first.state.contentLength > frame.height {
+            return layout(in: frame, offset: offset, reservingGutter: true, measure: measure)
         }
-        let bar = TerminalFrame(column: content.column + content.width, line: frame.line,
-                                width: reserved && frame.width > 0 ? 1 : 0, height: frame.height)
+        return first
+    }
+
+    // Modal sizing also uses this calculation while resolving its content-dependent height.
+    func layout(in frame: TerminalFrame, offset: Int = 0, reservingGutter: Bool,
+                measure: (Int) -> Int) -> TerminalScrollLayout {
+        let barWidth = reservingGutter && frame.width > 0 ? 1 : 0
+        let remainingWidth = max(0, frame.width - barWidth)
+        // Clamp before addition/subtraction, including a requested spacing of Int.max.
+        let spacingWidth = barWidth > 0 ? min(max(0, contentSpacing), max(0, remainingWidth - 1)) : 0
+        let content = TerminalFrame(column: frame.column, line: frame.line,
+                                    width: remainingWidth - spacingWidth, height: frame.height)
+        let spacing = TerminalFrame(column: content.column + content.width, line: frame.line,
+                                    width: spacingWidth, height: frame.height)
+        let bar = TerminalFrame(column: spacing.column + spacing.width, line: frame.line,
+                                width: barWidth, height: frame.height)
+        let length = max(0, measure(content.width))
         return TerminalScrollLayout(
-            contentFrame: content, scrollbarFrame: bar,
+            contentFrame: content, spacingFrame: spacing, scrollbarFrame: bar,
             state: TerminalScrollState(contentLength: length,
                                        viewportLength: content.width > 0 ? content.height : 0, offset: offset)
         )
     }
 
-    func contentFrame(in frame: TerminalFrame, reservingGutter: Bool) -> TerminalFrame {
-        TerminalFrame(column: frame.column, line: frame.line,
-                      width: frame.width - (reservingGutter ? 1 : 0), height: frame.height)
+    /// Clears the spacing and draws the bar using the same layout as the content.
+    /// Supply the surface's normal background; selection and emphasis never fill spacing.
+    /// Redraw/clear the content frame too when reusing a canvas after content or layout changes.
+    public func draw(on canvas: inout TerminalCanvas, layout: TerminalScrollLayout, background: Color? = nil) {
+        let frame = layout.gutterFrame
+        let firstColumn = max(0, frame.column)
+        let endColumn = min(canvas.size.width, frame.column + frame.width)
+        let firstLine = max(0, frame.line)
+        let endLine = min(canvas.size.height, frame.line + frame.height)
+        guard !frame.isEmpty, firstColumn < endColumn, firstLine < endLine else { return }
+        let geometry = TerminalScrollbarGeometry(state: layout.state, length: layout.scrollbarFrame.height)
+        for line in firstLine ..< endLine {
+            for column in firstColumn ..< endColumn {
+                if let cell = cell(column: column, line: line, layout: layout, geometry: geometry, background: background) {
+                    canvas.draw(String(cell.glyph), column: column, line: line, maxWidth: 1, style: cell.style)
+                }
+            }
+        }
+    }
+
+    // Both canvas rendering and declarative layers use the same spacing/bar cells.
+    func cell(column: Int, line: Int, layout: TerminalScrollLayout, geometry: TerminalScrollbarGeometry,
+              background: Color? = nil) -> (glyph: Character, style: TerminalStyle)? {
+        if layout.spacingFrame.contains(column: column, line: line) {
+            return (" ", TerminalStyle(background: background))
+        }
+        guard layout.scrollbarFrame.contains(column: column, line: line) else { return nil }
+        var value = cell(at: line - layout.scrollbarFrame.line, length: layout.scrollbarFrame.height,
+                         state: layout.state, geometry: geometry)
+        if value.style.background == nil { value.style.background = background }
+        return value
     }
 
     /// Draws only in the supplied scrollbar column; use a layout's scrollbar frame.

@@ -2,21 +2,36 @@ import Darwin
 import Foundation
 import KeelTUI
 
-/// A caller-owned input loop shared by two different kinds of scrolling content.
+/// A caller-owned input loop comparing the same spacing across four components.
 @MainActor
 final class ScrollingExample {
     private var text = TerminalTextViewport(
         lines: (1 ... 24).flatMap { index in
             ["Paragraph \(index). This sentence has a natural ending.",
              "There is more to read. 日本語の文章と結合文字 e\u{301} also wrap at the available width.", ""]
-        },
-        scrollbar: TerminalScrollbar(gutter: .stable)
+        }
     )
     private var list = TerminalSelectableList(
-        rows: (1 ... 60).map { "Item \($0)" },
-        scrollbar: TerminalScrollbar(gutter: .stable)
+        rows: (1 ... 60).map { "Item \($0). A deliberately long selectable row — 日本語 and e\u{301}." }
     )
-    private var focusesList = false
+    private var table = TerminalTable(
+        columns: [TerminalTableColumn(header: "No.", width: 4),
+                  TerminalTableColumn(header: "Description", width: 100)],
+        rows: (1 ... 60).map { index in
+            TerminalTableRow(cells: [TerminalTableCell("\(index)"),
+                                     TerminalTableCell("A long selected table row — 日本語 and e\u{301} reach the content edge.")])
+        },
+        selectedRowIndex: 0
+    )
+    private var modal = TerminalModal(
+        title: "Modal",
+        lines: (1 ... 24).map { "Paragraph \($0). Long modal text wraps before scrolling. 日本語と結合文字 e\u{301}." },
+        minimumWidth: 2
+    )
+    private var scrollbar = TerminalScrollbar(gutter: .stable, contentSpacing: 1)
+    private var showsTableAndModal = false
+    private var focusesRight = false
+    private var tableOffset = 0
     private var decoder = TerminalKeyDecoder()
     private var originalMode = termios()
     private var readSource: DispatchSourceRead?
@@ -24,6 +39,8 @@ final class ScrollingExample {
     private var interruptSource: DispatchSourceSignal?
     private var textFrame = TerminalFrame(column: 0, line: 0, width: 0, height: 0)
     private var listFrame = TerminalFrame(column: 0, line: 0, width: 0, height: 0)
+    private var tableFrame = TerminalFrame(column: 0, line: 0, width: 0, height: 0)
+    private var modalArea = TerminalFrame(column: 0, line: 0, width: 0, height: 0)
     private let lifecycle = TerminalLifecycle { output($0) }
 
     func start() {
@@ -67,44 +84,116 @@ final class ScrollingExample {
         case .character("q"), .ctrlC, .ctrlD:
             stop()
         case .tab:
-            focusesList.toggle()
+            focusesRight.toggle()
+        case .character("1"):
+            showsTableAndModal = false
+        case .character("2"):
+            showsTableAndModal = true
+        case .character("s"):
+            scrollbar.contentSpacing = scrollbar.contentSpacing == 0 ? 1 : 0
+            updateScrollbars()
         case .character("u"):
-            if focusesList { list.scroll(.pages(-1), in: listFrame) }
-            else { text.scroll(.pages(-1), in: textFrame) }
+            browse(.pages(-1))
         case .character("d"):
-            if focusesList { list.scroll(.pages(1), in: listFrame) }
-            else { text.scroll(.pages(1), in: textFrame) }
+            browse(.pages(1))
         case .character("g"):
-            if focusesList { list.scroll(.start, in: listFrame) }
-            else { text.scroll(.start, in: textFrame) }
+            browse(.start)
         case .character("G"):
-            if focusesList { list.scroll(.end, in: listFrame) }
-            else { text.scroll(.end, in: textFrame) }
+            browse(.end)
         default:
-            if focusesList { list.handle(key, in: listFrame) }
-            else { text.handle(key, in: textFrame) }
+            if showsTableAndModal {
+                guard let movement = movement(for: key) else { return }
+                if focusesRight { modal.scroll(movement, in: modalArea) }
+                else { moveTableSelection(movement) }
+            } else if focusesRight {
+                list.handle(key, in: listFrame)
+            } else {
+                text.handle(key, in: textFrame)
+            }
         }
+    }
+
+    private func movement(for key: TerminalKey) -> TerminalScrollMovement? {
+        switch key {
+        case .arrowUp, .character("k"): return .units(-1)
+        case .arrowDown, .character("j"): return .units(1)
+        case .pageUp: return .pages(-1)
+        case .pageDown: return .pages(1)
+        case .home: return .start
+        case .end: return .end
+        default: return nil
+        }
+    }
+
+    private func browse(_ movement: TerminalScrollMovement) {
+        if showsTableAndModal {
+            if focusesRight {
+                modal.scroll(movement, in: modalArea)
+            } else {
+                var state = table.layout(in: tableFrame, rowOffset: tableOffset).state
+                state.move(movement)
+                tableOffset = state.offset
+            }
+        } else if focusesRight {
+            list.scroll(movement, in: listFrame)
+        } else {
+            text.scroll(movement, in: textFrame)
+        }
+    }
+
+    private func moveTableSelection(_ movement: TerminalScrollMovement) {
+        var state = table.layout(in: tableFrame, rowOffset: tableOffset).state
+        var selection = TerminalScrollState(contentLength: table.rows.count, viewportLength: 1,
+                                             offset: table.selectedRowIndex ?? 0)
+        if case .pages(let count) = movement {
+            selection.move(.units(count * state.viewportLength))
+        } else {
+            selection.move(movement)
+        }
+        table.selectedRowIndex = selection.offset
+        state.move(.reveal(selection.offset ..< selection.offset + 1))
+        tableOffset = state.offset
     }
 
     private func draw() {
         var terminal = winsize()
         guard ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &terminal) == 0 else { return }
         let size = TerminalSize(width: Int(terminal.ws_col), height: Int(terminal.ws_row))
-        let bodyHeight = max(0, size.height - 2)
+        let bodyHeight = max(0, size.height - 3)
         let left = TerminalFrame(column: 0, line: 0, width: size.width / 2, height: bodyHeight)
         let right = TerminalFrame(column: left.width, line: 0, width: size.width - left.width, height: bodyHeight)
         textFrame = left.contentFrame()
         listFrame = right.contentFrame()
+        tableFrame = left.contentFrame()
+        modalArea = right
+        updateScrollbars()
         var canvas = TerminalCanvas(size: size)
-        canvas.drawBox(frame: left, title: "Text", focused: !focusesList)
-        canvas.drawBox(frame: right, title: "List", focused: focusesList)
-        text.draw(on: &canvas, frame: textFrame)
-        list.draw(on: &canvas, frame: listFrame)
-        canvas.draw("Tab: pane  Up/Down or j/k: move  PgUp/PgDn: page  q: quit",
+        if showsTableAndModal {
+            canvas.drawBox(frame: left, title: "Table", focused: !focusesRight)
+            let layout = table.draw(on: &canvas, frame: tableFrame, rowOffset: tableOffset)
+            tableOffset = layout.state.offset
+            modal.focused = focusesRight
+            modal.draw(on: &canvas, in: modalArea)
+        } else {
+            canvas.drawBox(frame: left, title: "Text", focused: !focusesRight)
+            canvas.drawBox(frame: right, title: "List", focused: focusesRight)
+            text.draw(on: &canvas, frame: textFrame)
+            list.draw(on: &canvas, frame: listFrame)
+        }
+        canvas.draw("Spacing: \(scrollbar.contentSpacing)  s: toggle 0/1  1: Text/List  2: Table/Modal",
                     column: 0, line: bodyHeight, maxWidth: size.width)
-        canvas.draw("Home/End: endpoints  u/d: browse page  g/G: browse endpoints",
+        canvas.draw("Tab: pane  Up/Down or j/k: move  PgUp/PgDn: page  q: quit",
                     column: 0, line: bodyHeight + 1, maxWidth: size.width)
+        canvas.draw("Home/End: endpoints  u/d: browse page  g/G: browse endpoints",
+                    column: 0, line: bodyHeight + 2, maxWidth: size.width)
         output("\u{1B}[H" + canvas.snapshot().ansiText.replacingOccurrences(of: "\n", with: "\r\n"))
+    }
+
+    private func updateScrollbars() {
+        text.scrollbar = scrollbar
+        list.scrollbar = scrollbar
+        table.scrollbar = scrollbar
+        modal.scrollbar = scrollbar
     }
 
     private func stop() -> Never {

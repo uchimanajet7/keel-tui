@@ -171,7 +171,8 @@ public struct TerminalCanvas {
         }
     }
 
-    public mutating func clear(frame: TerminalFrame) {
+    /// Clears a region using its normal surface style, including a custom background.
+    public mutating func clear(frame: TerminalFrame, style: TerminalStyle = .plain) {
         guard !frame.isEmpty else { return }
 
         let minColumn = max(0, frame.minColumn)
@@ -183,6 +184,7 @@ public struct TerminalCanvas {
         for line in minLine ... maxLine {
             for column in minColumn ... maxColumn {
                 clearCell(column: column, line: line)
+                cells[line][column].style = style
             }
         }
     }

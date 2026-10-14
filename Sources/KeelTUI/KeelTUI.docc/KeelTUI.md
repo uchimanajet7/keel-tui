@@ -4,9 +4,14 @@ A general-purpose terminal user interface toolkit for Swift applications on macO
 
 ## Documentation
 
-This reference describes KeelTUI 0.3.0. Also check out the
-[README](https://github.com/uchimanajet7/keel-tui/blob/0.3.0/README.md) and the included
-[example projects](https://github.com/uchimanajet7/keel-tui/tree/0.3.0/Examples).
+This reference documents the source in this checkout, including the content-spacing
+API. The installation example below targets KeelTUI **0.3.0**; its
+[versioned README](https://github.com/uchimanajet7/keel-tui/blob/0.3.0/README.md) and
+[example projects](https://github.com/uchimanajet7/keel-tui/tree/0.3.0/Examples)
+describe that release. The content-spacing additions are not in the 0.3.0 tag.
+
+See <doc:Scrolling> for usage, and this checkout's `Examples/Scrolling/README.md`
+for an interactive comparison of spacing 0 and 1 in text, lists, tables, and modals.
 
 ## Getting started
 
@@ -80,6 +85,15 @@ Version 0.3.0 adds these capabilities to text viewports, selectable lists, modal
 tables, and declarative scroll views. Height-only slicing now saves the normalized
 offset and requires mutable component values; `TerminalModalLayout` metadata is
 read-only and constructed from a shared scroll layout.
+
+``TerminalScrollbar/contentSpacing`` adds optional blank display cells between
+content and the bar for all five components. It defaults to **0**, preserving
+existing widths and wrapping; the examples explicitly choose **1** to show
+separation. ``TerminalScrollLayout/spacingFrame`` exposes the reserved spacing,
+and ``TerminalScrollbar/draw(on:layout:background:)`` clears it using the normal
+surface background while drawing the bar. Measurement, clipping, and drawing use
+the same final content frame. The scrolling guide explains reservation rules,
+spacing reduction in narrow frames, and low-level and declarative examples.
 
 `TerminalKeyBindingPresentation` is a display-only descriptor shared by status and grouped-help adapters. Both adapters require an explicit disabled-binding visibility policy.
 

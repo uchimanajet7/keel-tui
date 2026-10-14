@@ -115,19 +115,23 @@ public struct TerminalSelectableList: Equatable {
     }
 
     /// Draws clipped single-row items and an indicator in separate columns.
+    /// `background` is the normal surface color, independent of row and selection styles.
     @discardableResult
     public mutating func draw(on canvas: inout TerminalCanvas, frame: TerminalFrame,
                               style: TerminalStyle = .plain,
-                              selectedStyle: TerminalStyle = TerminalStyle(isReversed: true)) -> TerminalScrollLayout {
+                              selectedStyle: TerminalStyle = TerminalStyle(isReversed: true),
+                              background: Color? = nil) -> TerminalScrollLayout {
         let layout = layout(in: frame)
-        canvas.clear(frame: frame)
+        canvas.clear(frame: frame, style: TerminalStyle(background: background))
         for (row, index) in layout.state.visibleRange.enumerated() {
             let text = rows[index].split(maxSplits: 1, omittingEmptySubsequences: false,
                                          whereSeparator: { $0.isNewline }).first.map(String.init) ?? ""
+            let rowStyle = index == selectedIndex ? selectedStyle : style
             canvas.draw(text, column: layout.contentFrame.column, line: layout.contentFrame.line + row,
-                        maxWidth: layout.contentFrame.width, style: index == selectedIndex ? selectedStyle : style)
+                        maxWidth: layout.contentFrame.width,
+                        style: rowStyle.background(rowStyle.background ?? background))
         }
-        scrollbar.draw(on: &canvas, frame: layout.scrollbarFrame, state: layout.state)
+        scrollbar.draw(on: &canvas, layout: layout, background: background)
         return layout
     }
 
@@ -148,7 +152,7 @@ public struct TerminalSelectableList: Equatable {
 public struct TerminalTextViewportLayout: Equatable {
     /// All display rows after wrapping at the final content width.
     public let wrappedLines: [String]
-    /// Content/gutter geometry and the normalized display-row state.
+    /// Content/spacing/scrollbar geometry and the normalized display-row state.
     public let scroll: TerminalScrollLayout
     /// The display rows in the normalized visible range.
     public var visibleLines: [String] { Array(wrappedLines[scroll.state.visibleRange]) }
@@ -160,7 +164,7 @@ public struct TerminalTextViewport: Equatable {
     public var lines: [String]
     /// The first display row, normalized and saved when measuring or moving.
     public var scrollOffset: Int
-    /// Indicator and gutter configuration for frame-based wrapping and drawing.
+    /// Indicator, gutter, and content spacing for frame-based wrapping and drawing.
     public var scrollbar: TerminalScrollbar
     private var viewportHeight = 0
     private var lastFrame: TerminalFrame?
@@ -235,7 +239,7 @@ public struct TerminalTextViewport: Equatable {
         return Array(lines[state.visibleRange])
     }
 
-    /// Allocates the gutter before wrapping and saves the normalized display-row offset.
+    /// Allocates the scrollbar and spacing before wrapping at the final content width.
     public mutating func layout(in frame: TerminalFrame) -> TerminalTextViewportLayout {
         var wrapped: [String] = []
         let input = lines.map { TerminalModalLine(text: $0) }
@@ -250,16 +254,17 @@ public struct TerminalTextViewport: Equatable {
     }
 
     /// Draws wrapped rows and the indicator without overlapping the content.
+    /// `background` fills the normal surface; `style` applies to the text only.
     @discardableResult
     public mutating func draw(on canvas: inout TerminalCanvas, frame: TerminalFrame,
-                              style: TerminalStyle = .plain) -> TerminalTextViewportLayout {
+                              style: TerminalStyle = .plain, background: Color? = nil) -> TerminalTextViewportLayout {
         let layout = layout(in: frame)
-        canvas.clear(frame: frame)
+        canvas.clear(frame: frame, style: TerminalStyle(background: background))
         for (row, text) in layout.visibleLines.enumerated() {
             canvas.draw(text, column: layout.scroll.contentFrame.column, line: layout.scroll.contentFrame.line + row,
-                        maxWidth: layout.scroll.contentFrame.width, style: style)
+                        maxWidth: layout.scroll.contentFrame.width, style: style.background(style.background ?? background))
         }
-        scrollbar.draw(on: &canvas, frame: layout.scroll.scrollbarFrame, state: layout.scroll.state)
+        scrollbar.draw(on: &canvas, layout: layout.scroll, background: background)
         return layout
     }
 }

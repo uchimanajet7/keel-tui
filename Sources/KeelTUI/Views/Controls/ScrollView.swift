@@ -8,7 +8,8 @@ public struct ScrollView<Content: View>: View, PrimitiveView {
     let content: VStack<Content>
     let scrollbar: TerminalScrollbar
 
-    /// Creates a viewport with independently configurable indicator visibility and gutter.
+    /// Creates a viewport with configurable visibility, gutter reservation, and content spacing.
+    /// Spacing uses the view's normal background and defaults to zero.
     public init(scrollbar: TerminalScrollbar = TerminalScrollbar(), @ViewBuilder _ content: () -> Content) {
         self.content = VStack(content: content())
         self.scrollbar = scrollbar
@@ -50,7 +51,7 @@ public struct ScrollView<Content: View>: View, PrimitiveView {
             super.layout(size: size)
             let frame = TerminalFrame(column: 0, line: 0, width: max(0, size.width.intValue),
                                       height: max(0, size.height.intValue))
-            let layout = scrollbar.layout(in: frame, offset: state.offset) { width in
+            var layout = scrollbar.layout(in: frame, offset: state.offset) { width in
                 let contentSize = self.contentControl.size(proposedSize: Size(width: Extended(width), height: 0))
                 return contentSize.height.intValue
             }
@@ -63,11 +64,12 @@ public struct ScrollView<Content: View>: View, PrimitiveView {
             }
             contentControl.layer.frame.position.line = Extended(-state.offset)
             indicatorControl.layer.frame = Rect(
-                position: Position(column: Extended(layout.scrollbarFrame.column), line: 0),
-                size: Size(width: Extended(layout.scrollbarFrame.width), height: size.height)
+                position: Position(column: Extended(layout.gutterFrame.column), line: 0),
+                size: Size(width: Extended(layout.gutterFrame.width), height: size.height)
             )
             indicatorControl.scrollbar = scrollbar
-            indicatorControl.state = state
+            layout.state = state
+            indicatorControl.scrollLayout = layout
         }
 
         override func scroll(to position: Position) {
@@ -77,7 +79,7 @@ public struct ScrollView<Content: View>: View, PrimitiveView {
             state.move(.reveal(destination ..< destination + 1))
             pendingDestination = nil
             contentControl.layer.frame.position.line = Extended(-state.offset)
-            indicatorControl.state = state
+            indicatorControl.scrollLayout?.state = state
             layer.invalidate()
         }
     }
@@ -86,14 +88,17 @@ public struct ScrollView<Content: View>: View, PrimitiveView {
         var scrollbar = TerminalScrollbar() {
             didSet { if oldValue != scrollbar { layer.invalidate() } }
         }
-        var state = TerminalScrollState(contentLength: 0, viewportLength: 0) {
-            didSet { if oldValue != state { layer.invalidate() } }
+        var scrollLayout: TerminalScrollLayout? {
+            didSet { if oldValue != scrollLayout { layer.invalidate() } }
         }
 
         override func cell(at position: Position) -> Cell? {
-            let length = layer.frame.size.height.intValue
-            let value = scrollbar.cell(at: position.line.intValue, length: length, state: state,
-                                       geometry: TerminalScrollbarGeometry(state: state, length: length))
+            guard let layout = scrollLayout,
+                  let value = scrollbar.cell(
+                    column: position.column.intValue + layout.gutterFrame.column,
+                    line: position.line.intValue + layout.gutterFrame.line, layout: layout,
+                    geometry: TerminalScrollbarGeometry(state: layout.state, length: layout.scrollbarFrame.height)
+                  ) else { return nil }
             return Cell(char: value.glyph, foregroundColor: value.style.foreground ?? .default,
                         backgroundColor: value.style.background,
                         attributes: CellAttributes(bold: value.style.isBold, dim: value.style.isDim,

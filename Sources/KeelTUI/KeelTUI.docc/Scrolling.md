@@ -1,7 +1,7 @@
 # Consistent scrolling
 
 Use `TerminalScrollState` for one-dimensional range and movement calculations, and
-`TerminalScrollbar` for a vertical indicator and its reserved column. The same
+`TerminalScrollbar` for a vertical indicator, its reserved column, and content spacing. The same
 normalized state drives content slicing, movement, and the indicator. Input routing,
 focus, selection, and following newly appended content remain application policies.
 
@@ -22,12 +22,33 @@ and reveals controls using the existing focus mechanism.
 ## Layout and indicators
 
 First remove borders, titles, fixed headers, and padding from the available frame.
-Then allocate the scrollbar gutter, lay out the content at the remaining width,
-and resolve its scroll state. `visibility: .whenNeeded` displays an indicator on the
-first overflowing frame, independent of focus or input. `.hidden` suppresses it.
-`gutter: .stable` reserves a column even when the indicator is hidden or unnecessary;
-`.automatic` allocates it only while the indicator is needed and remeasures content
-at the reduced width. No indicator overlaps the content.
+Then resolve three disjoint regions in order: **content → spacing → scrollbar**.
+Measure and wrap at the final `contentFrame.width`, then resolve the scroll state
+from those rows and the content viewport. `TerminalScrollLayout` exposes read-only
+`contentFrame`, `spacingFrame`, and `scrollbarFrame` values for measurement, clipping,
+and drawing without duplicating width or coordinate calculations.
+
+The three independent settings are:
+
+| Setting | Meaning |
+| --- | --- |
+| `visibility` | `.whenNeeded` draws overflow immediately, independently of focus; `.hidden` suppresses the indicator. |
+| `gutter` | `.stable` always reserves the bar and spacing, even for empty/fitting content or hidden visibility. `.automatic` reserves them only when a visible bar is needed. |
+| `contentSpacing` | Integer display cells between content and the one-column bar, reserved only with the gutter. Defaults to **0**, preserving existing widths and wrapping. |
+
+With `.automatic` and `.whenNeeded`, measure without reservation first. Only if
+those rows exceed the viewport, allocate both bar and spacing and measure again at
+the final content width. `.automatic` with `.hidden` reserves neither. With
+`.stable`, the content width stays the same for a given frame and configuration
+regardless of content length, focus, or indicator visibility.
+
+The examples explicitly choose `contentSpacing: 1` to show separation. One cell is
+an optional choice, not a universal standard. Negative values act as zero, including
+after assignment. Large values are bounded before arithmetic can overflow. Spacing
+shrinks first to preserve one content cell when possible: a reserved bar in width
+2 uses content 1, spacing 0, bar 1; width 1 uses content 0, spacing 0, bar 1. Width
+0 or height 0 draws nothing. Wide and combining characters retain the existing
+grapheme and display-width behavior and are never split to fit a narrow frame.
 
 The default is `.whenNeeded` with `.automatic`. Use `.stable` when wrapping must
 remain unchanged as content starts or stops overflowing. A track and thumb show
@@ -58,7 +79,7 @@ before the next draw. Heights exclude borders, titles, padding, and fixed header
 ```swift
 var text = TerminalTextViewport(
     lines: ["A complete sentence.", "More content follows.", "日本語 and e\u{301}."],
-    scrollbar: TerminalScrollbar(gutter: .stable)
+    scrollbar: TerminalScrollbar(gutter: .stable, contentSpacing: 1)
 )
 let size = TerminalSize(width: 24, height: 2)
 let body = TerminalFrame(column: 0, line: 0, width: size.width, height: size.height)
@@ -69,7 +90,10 @@ text.handle(.pageDown, in: body)
 text.scroll(.end, in: body)
 text.draw(on: &canvas, frame: body)
 
-var list = TerminalSelectableList(rows: (1 ... 20).map { "Item \($0)" })
+var list = TerminalSelectableList(
+    rows: (1 ... 20).map { "Item \($0)" },
+    scrollbar: TerminalScrollbar(gutter: .stable, contentSpacing: 1)
+)
 list.handle(.arrowDown, in: body) // changes selection and reveals it
 list.scroll(.pages(1), in: body) // changes only the viewing position
 list.revealSelection()           // explicitly returns to the selected item
@@ -89,7 +113,7 @@ move a copy of that same state before saving its offset. The common calculation
 does not assign keys, selection, focus, or a follow-the-end policy.
 
 ```swift
-let scrollbar = TerminalScrollbar(gutter: .stable)
+let scrollbar = TerminalScrollbar(gutter: .stable, contentSpacing: 1)
 var offset = 999 // arbitrary caller-owned position; layout will normalize it
 let frame = TerminalFrame(column: 0, line: 0, width: 20, height: 4)
 var rows: [String] = []
@@ -100,14 +124,28 @@ let layout = scrollbar.layout(in: frame, offset: offset) { width in
 var state = layout.state
 offset = state.offset
 var canvas = TerminalCanvas(size: TerminalSize(width: 20, height: 4))
+canvas.clear(frame: frame) // also clear content when reusing a canvas
 for (line, index) in state.visibleRange.enumerated() {
     canvas.draw(rows[index], column: layout.contentFrame.column,
                 line: layout.contentFrame.line + line, maxWidth: layout.contentFrame.width)
 }
-scrollbar.draw(on: &canvas, frame: layout.scrollbarFrame, state: state)
+scrollbar.draw(on: &canvas, layout: layout) // clears spacing and draws/clears the bar
 state.move(.pages(1)) // also .units(-1), .start, .end, .reveal(aRange)
 offset = state.offset
 ```
+
+The layout-based drawing path clears spacing with a normal background and no
+selection, inversion, or emphasis. For a custom surface, use
+`canvas.clear(frame: frame, style: TerminalStyle(background: .blue))` and
+`scrollbar.draw(on: &canvas, layout: layout, background: .blue)`, and use that
+background for normal content too. Redraw the content on selection, size, settings,
+or content changes; regions released by an automatic gutter belong to content
+again. The built-in components clear their supplied frames on every draw. When a
+caller moves or shrinks an outer frame, it must repaint the area it previously
+owned; component drawing never owns the area outside its current frame.
+
+`draw(on:frame:state:)` retains its original bar-only meaning: it writes only in
+the supplied scrollbar column and does not clear adjacent spacing.
 
 `update(contentLength:viewportLength:)` reuses a retained state after new measurements.
 Movement saturates safely even for extreme integer offsets or page counts.
@@ -120,14 +158,21 @@ are left blank to avoid writing outside the reserved column.
 ## Modals, tables, and declarative views
 
 `TerminalModal.layout(in:)` wraps inside borders, title rows, padding, and the
-scrollbar gutter. Its `scroll.state` supplies all range and movement information.
+scrollbar and spacing. Natural width includes the stable gutter's reservation;
+preferred, minimum, maximum, and caller-area bounds still apply. An explicit frame
+is never enlarged for spacing. Automatic gutters also preserve the existing
+content-derived outer width: reservation is decided inside that chosen width and
+bounded body height, then wrapping and height are resolved again using
+the common layout. Measurement and drawing use the same final content width.
+Its `scroll.state` supplies all range and movement information.
 `modal.scroll(.pages(1), in: area)` measures, moves, and saves the next offset.
 Reading a layout or drawing a modal remains stateless; it does not mutate the
 modal's requested offset. Use `scroll(_:in:)`, or copy/move the returned state and
 assign its offset, instead of incrementing an unnormalized requested offset.
 
 `TerminalTable.layout(in:rowOffset:maxRows:)` and `draw` return the same shared
-layout for the scrolling body. The header consumes one row and never scrolls.
+layout for the scrolling body. The header uses the same content width, consumes
+one row, and never scrolls.
 `maxRows` further limits the actual body viewport. Selection highlighting is
 independent of `rowOffset`; reveal a selected record explicitly when that is the
 desired policy:
@@ -136,7 +181,7 @@ desired policy:
 let table = TerminalTable(
     columns: [TerminalTableColumn(header: "Name", width: 12)],
     rows: (1 ... 30).map { TerminalTableRow(cells: [TerminalTableCell("Item \($0)")]) },
-    scrollbar: TerminalScrollbar(gutter: .stable)
+    scrollbar: TerminalScrollbar(gutter: .stable, contentSpacing: 1)
 )
 let frame = TerminalFrame(column: 0, line: 0, width: 20, height: 8)
 var canvas = TerminalCanvas(size: TerminalSize(width: 20, height: 8))
@@ -148,7 +193,7 @@ table.draw(on: &canvas, frame: frame, rowOffset: state.offset)
 Declarative views need no externally stored offset:
 
 ```swift
-ScrollView(scrollbar: TerminalScrollbar(gutter: .stable)) {
+ScrollView(scrollbar: TerminalScrollbar(gutter: .stable, contentSpacing: 1)) {
     ForEach(1 ... 40, id: \.self) { index in
         Button("Item \(index)") { /* application action */ }
     }
@@ -161,12 +206,20 @@ selects a control. Content without selectable controls still gets an indicator;
 the existing declarative input mechanism only scrolls through focusable controls.
 `ScrollView` measures child layout at the final width; it does not change a child's
 own layout policy (for example, declarative `Text` remains single-line).
+An enclosing `.background(...)` also supplies the spacing background without
+inheriting a child's selected or highlighted appearance. Canvas text viewports,
+lists, tables, and modals accept `background:` on `draw` for the normal surface.
+It defaults to the terminal background, preserving existing rendering. Content,
+row, selection, and scrollbar styles can override it for their own cells without
+affecting spacing. For example, use `list.draw(on: &canvas, frame: body,
+background: .blue)` to fill its normal surface, including spacing, with blue.
 
 ## Migrating from 0.2.0 to 0.3.0
 
 Set the package dependency to
 `.package(url: "https://github.com/uchimanajet7/keel-tui", from: "0.3.0")`
-to use the APIs described in this guide.
+for the 0.3.0 migration below. `contentSpacing`, `spacingFrame`, and layout-based
+scrollbar drawing are additions in this checkout, not in the 0.3.0 tag.
 
 - `TerminalTextViewport.visibleLines(height:)`,
   `TerminalSelectableList.visibleRows(height:)`, and
@@ -190,8 +243,9 @@ to use the APIs described in this guide.
 - A table's out-of-range `rowOffset` now clamps to the final viewport. `draw` returns
   a discardable `TerminalScrollLayout`; use its state for the next movement.
 
-Run the generic [Scrolling example](https://github.com/uchimanajet7/keel-tui/tree/0.3.0/Examples/Scrolling)
+Run the generic Scrolling example in this checkout's `Examples/Scrolling`
 with `swift run` from its directory. Its README describes
-keys and expected first-frame, endpoint, selection, and resize behavior. Run
+keys to compare spacing 0/1 in text, list, table, and modal displays, plus expected
+first-frame, endpoint, selection, and resize behavior. Run
 `swift test` at the repository root for automated verification. Terminal-emulator
 visual inspection is a separate check.
