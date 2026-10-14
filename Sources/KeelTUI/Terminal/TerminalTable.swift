@@ -92,20 +92,22 @@ public struct TerminalTable: Equatable, Sendable {
     }
 
     /// Draws the fixed header and normalized body, returning the state for subsequent movement.
+    /// Header and body share the final content width; `background` fills the normal surface.
     @discardableResult
     public func draw(
         on canvas: inout TerminalCanvas,
         frame: TerminalFrame,
         rowOffset: Int = 0,
-        maxRows: Int? = nil
+        maxRows: Int? = nil,
+        background: Color? = nil
     ) -> TerminalScrollLayout {
         let layout = layout(in: frame, rowOffset: rowOffset, maxRows: maxRows)
         guard !frame.isEmpty, !columns.isEmpty else { return layout }
 
-        canvas.clear(frame: frame)
+        canvas.clear(frame: frame, style: TerminalStyle(background: background))
         let content = TerminalFrame(column: frame.column, line: frame.line,
                                     width: layout.contentFrame.width, height: frame.height)
-        drawHeader(on: &canvas, frame: content)
+        drawHeader(on: &canvas, frame: content, background: background)
 
         for (visibleOffset, rowIndex) in layout.state.visibleRange.enumerated() {
             drawRow(
@@ -113,14 +115,15 @@ public struct TerminalTable: Equatable, Sendable {
                 rowIndex: rowIndex,
                 on: &canvas,
                 frame: content,
-                line: frame.line + 1 + visibleOffset
+                line: frame.line + 1 + visibleOffset,
+                background: background
             )
         }
-        scrollbar.draw(on: &canvas, frame: layout.scrollbarFrame, state: layout.state)
+        scrollbar.draw(on: &canvas, layout: layout, background: background)
         return layout
     }
 
-    private func drawHeader(on canvas: inout TerminalCanvas, frame: TerminalFrame) {
+    private func drawHeader(on canvas: inout TerminalCanvas, frame: TerminalFrame, background: Color?) {
         drawCells(
             columns.map { column in
                 TerminalTableCell(column.header, style: headerStyle)
@@ -129,7 +132,8 @@ public struct TerminalTable: Equatable, Sendable {
             on: &canvas,
             frame: frame,
             line: frame.line,
-            gutterText: ""
+            gutterText: "",
+            background: background
         )
     }
 
@@ -138,7 +142,8 @@ public struct TerminalTable: Equatable, Sendable {
         rowIndex: Int,
         on canvas: inout TerminalCanvas,
         frame: TerminalFrame,
-        line: Int
+        line: Int,
+        background: Color?
     ) {
         let isSelected = selectedRowIndex == rowIndex
         let rowStyle = isSelected ? selectedRowStyle : row.style
@@ -148,7 +153,8 @@ public struct TerminalTable: Equatable, Sendable {
             on: &canvas,
             frame: frame,
             line: line,
-            gutterText: isSelected ? selectionMarker : ""
+            gutterText: isSelected ? selectionMarker : "",
+            background: background
         )
     }
 
@@ -158,10 +164,12 @@ public struct TerminalTable: Equatable, Sendable {
         on canvas: inout TerminalCanvas,
         frame: TerminalFrame,
         line: Int,
-        gutterText: String
+        gutterText: String,
+        background: Color?
     ) {
         guard line >= frame.line, line <= frame.maxLine else { return }
 
+        let rowStyle = rowStyle.background(rowStyle.background ?? background)
         var column = frame.column
         if selectionGutterWidth > 0 {
             let gutter = fit(
@@ -184,12 +192,13 @@ public struct TerminalTable: Equatable, Sendable {
                 overflow: tableColumn.overflow
             )
             let remainingWidth = max(0, frame.column + frame.width - column)
+            let cellStyle = cell.style ?? rowStyle
             canvas.draw(
                 text,
                 column: column,
                 line: line,
                 maxWidth: min(tableColumn.width, remainingWidth),
-                style: cell.style ?? rowStyle
+                style: cellStyle.background(cellStyle.background ?? background)
             )
             column += tableColumn.width
 

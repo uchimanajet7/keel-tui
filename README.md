@@ -2,7 +2,8 @@
 
 KeelTUI is a general-purpose terminal user interface toolkit for Swift applications on macOS 26 and later. It provides a declarative, SwiftUI-inspired API together with reusable lower-level terminal primitives.
 
-This documentation describes KeelTUI **0.3.0**.
+The installation example targets KeelTUI **0.3.0**. The scrolling section also
+documents the content-spacing API in this checkout.
 
 ## Requirements
 
@@ -19,7 +20,7 @@ This documentation describes KeelTUI **0.3.0**.
 - Terminal canvas and plain-text or ANSI snapshots
 - Unicode-aware display-width handling
 - Keyboard decoding, focus coordination, selectable lists, and text viewports
-- Shared scroll ranges, viewport-sized movement, and configurable scrollbars with stable gutters
+- Shared scroll ranges, viewport-sized movement, and configurable scrollbars with stable gutters and content spacing
 - Tables, panes, modals, status bars, and terminal lifecycle management
 
 ## Getting started
@@ -120,7 +121,7 @@ let help = TerminalModal(
 )
 ```
 
-## Shared scrolling in 0.3.0
+## Shared scrolling
 
 `TerminalScrollState` owns normalized content/viewport lengths, offset, visible
 range, and before/after flags. It supports unit and viewport-sized page movement,
@@ -130,19 +131,47 @@ without choosing keys, focus, selection, or follow-the-end behavior.
 Text viewports, selectable lists, modals, tables, and declarative `ScrollView` use
 the shared calculations. Indicators appear on initial overflow, including in
 unfocused panes. `visibility: .whenNeeded` / `.hidden` controls drawing;
-`gutter: .automatic` / `.stable` controls width allocation. A stable gutter is
-reserved before text wraps, so showing or hiding the bar does not change wrapping.
+`gutter: .automatic` / `.stable` controls reservation; `contentSpacing` sets the
+blank display cells between content and the one-column bar. It defaults to **0**,
+preserving existing widths and wrapping. The example explicitly chooses **1** to
+show separation; this is optional, not a universal terminal convention.
+
+A stable gutter reserves both spacing and the bar even when content fits or
+visibility is hidden. An automatic gutter with `.whenNeeded` measures without
+reservation first and reserves both only on overflow, then remeasures at the final
+content width. Hidden automatic gutters reserve neither. Negative spacing acts as
+zero; oversized spacing shrinks before content, without integer overflow. With a
+reserved bar, widths 2 and 1 yield content widths 1 and 0, with no spacing. Zero
+width or height draws nothing, and zero content width has an empty visible range.
 
 ```swift
 var text = TerminalTextViewport(
     lines: ["A complete sentence.", "There is more below.", "日本語 and e\u{301}."],
-    scrollbar: TerminalScrollbar(gutter: .stable)
+    scrollbar: TerminalScrollbar(visibility: .whenNeeded, gutter: .stable, contentSpacing: 1)
 )
 let frame = TerminalFrame(column: 0, line: 0, width: 24, height: 2)
 var canvas = TerminalCanvas(size: TerminalSize(width: 24, height: 2))
 text.draw(on: &canvas, frame: frame)
 text.handle(.pageDown, in: frame)
 text.draw(on: &canvas, frame: frame)
+```
+
+Low-level callers use `TerminalScrollbar.layout(in:offset:measure:)` for the final
+measurement width, then clip drawing to `layout.contentFrame` and call
+`scrollbar.draw(on: &canvas, layout: layout)`. Its read-only `spacingFrame` and
+`scrollbarFrame` share that calculation. Spacing is cleared with the normal surface
+background, independently of selection. Pass `background:` for a custom canvas
+surface. The existing `draw(on:frame:state:)` still draws only in the supplied bar
+frame. See the guide below for a complete low-level example.
+
+The same configuration works in the declarative API:
+
+```swift
+ScrollView(scrollbar: TerminalScrollbar(gutter: .stable, contentSpacing: 1)) {
+    ForEach(1 ... 40, id: \.self) { index in
+        Button("Item \(index)") { /* application action */ }
+    }
+}
 ```
 
 See the [scrolling guide](Sources/KeelTUI/KeelTUI.docc/Scrolling.md) for units,
@@ -165,6 +194,10 @@ swift package --allow-writing-to-directory ./docs \
     --warnings-as-errors
 ```
 
+If the selected Command Line Tools do not provide `docc`, prefix the command with
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` to use an installed
+Xcode toolchain.
+
 This prepares static files; publishing them requires a separately configured web
 host. For a local preview, run `swift package preview-documentation --target KeelTUI`
 and open the URL printed by the command.
@@ -177,7 +210,7 @@ The repository includes five executable example packages:
 - [Flags](Examples/Flags)
 - [Numbers](Examples/Numbers)
 - [ToDoList](Examples/ToDoList)
-- [Scrolling](Examples/Scrolling): wrapped text and a selectable list sharing scroll calculations and stable scrollbars; includes operation and resize checks.
+- [Scrolling](Examples/Scrolling): wrapped text, a selectable list, a table, and a modal sharing stable scrollbars; press `s` to compare spacing 0/1 and `1`/`2` to switch displays. Includes operation and resize checks.
 
 Run an example with `swift run` from its directory. Run automated tests with
 `swift test` from the repository root. If the selected Command Line Tools lack
