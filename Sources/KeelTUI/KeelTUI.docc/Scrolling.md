@@ -36,6 +36,8 @@ The three independent settings are:
 | `gutter` | `.stable` always reserves the bar and spacing, even for empty/fitting content or hidden visibility. `.automatic` reserves them only when a visible bar is needed. |
 | `contentSpacing` | Integer display cells between content and the one-column bar, reserved only with the gutter. Defaults to **0**, preserving existing widths and wrapping. |
 
+Content spacing requires KeelTUI 0.4.0 or later.
+
 With `.automatic` and `.whenNeeded`, measure without reservation first. Only if
 those rows exceed the viewport, allocate both bar and spacing and measure again at
 the final content width. `.automatic` with `.hidden` reserves neither. With
@@ -216,11 +218,6 @@ background: .blue)` to fill its normal surface, including spacing, with blue.
 
 ## Migrating from 0.2.0 to 0.3.0
 
-Set the package dependency to
-`.package(url: "https://github.com/uchimanajet7/keel-tui", from: "0.3.0")`
-for the 0.3.0 migration below. `contentSpacing`, `spacingFrame`, and layout-based
-scrollbar drawing are additions in this checkout, not in the 0.3.0 tag.
-
 - `TerminalTextViewport.visibleLines(height:)`,
   `TerminalSelectableList.visibleRows(height:)`, and
   `normalizedScrollOffset(height:)` now mutate the retained offset. Declare these
@@ -243,7 +240,9 @@ scrollbar drawing are additions in this checkout, not in the 0.3.0 tag.
 - A table's out-of-range `rowOffset` now clamps to the final viewport. `draw` returns
   a discardable `TerminalScrollLayout`; use its state for the next movement.
 
-Run the generic Scrolling example in this checkout's `Examples/Scrolling`
+## Running the example
+
+Run the generic Scrolling example in the repository's `Examples/Scrolling`
 with `swift run` from its directory. Its README describes
 keys to compare spacing 0/1 in text, list, table, and modal displays, plus expected
 first-frame, endpoint, selection, and resize behavior. Run

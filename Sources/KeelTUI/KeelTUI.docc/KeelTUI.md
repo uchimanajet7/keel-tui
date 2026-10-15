@@ -4,14 +4,9 @@ A general-purpose terminal user interface toolkit for Swift applications on macO
 
 ## Documentation
 
-This reference documents the source in this checkout, including the content-spacing
-API. The installation example below targets KeelTUI **0.3.0**; its
-[versioned README](https://github.com/uchimanajet7/keel-tui/blob/0.3.0/README.md) and
-[example projects](https://github.com/uchimanajet7/keel-tui/tree/0.3.0/Examples)
-describe that release. The content-spacing additions are not in the 0.3.0 tag.
-
-See <doc:Scrolling> for usage, and this checkout's `Examples/Scrolling/README.md`
-for an interactive comparison of spacing 0 and 1 in text, lists, tables, and modals.
+See <doc:Scrolling> for usage and migration notes.
+The repository's [Scrolling example](https://github.com/uchimanajet7/keel-tui/tree/main/Examples/Scrolling)
+provides an interactive comparison of spacing 0 and 1 in text, lists, tables, and modals.
 
 ## Getting started
 
@@ -30,7 +25,7 @@ let package = Package(
   dependencies: [
     .package(
       url: "https://github.com/uchimanajet7/keel-tui",
-      from: "0.3.0"
+      from: "0.4.0"
     )
   ],
   targets: [
@@ -80,9 +75,8 @@ swift run
 `TerminalModal` wraps after allocating its content width and scrollbar gutter. `layout(in:)` exposes the natural height, wrapped and visible lines, and shared scroll state. Rendering does not handle input; the application supplies movement through `scroll(_:in:)` or the returned state.
 
 See <doc:Scrolling> for shared range and movement calculations, immediate overflow indicators,
-stable gutter allocation, state ownership, and migration from the 0.2.0 viewport APIs.
-Version 0.3.0 adds these capabilities to text viewports, selectable lists, modals,
-tables, and declarative scroll views. Height-only slicing now saves the normalized
+stable gutter allocation, and state ownership in text viewports, selectable lists,
+modals, tables, and declarative scroll views. Height-only slicing saves the normalized
 offset and requires mutable component values; `TerminalModalLayout` metadata is
 read-only and constructed from a shared scroll layout.
 

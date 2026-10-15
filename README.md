@@ -2,9 +2,6 @@
 
 KeelTUI is a general-purpose terminal user interface toolkit for Swift applications on macOS 26 and later. It provides a declarative, SwiftUI-inspired API together with reusable lower-level terminal primitives.
 
-The installation example targets KeelTUI **0.3.0**. The scrolling section also
-documents the content-spacing API in this checkout.
-
 ## Requirements
 
 - macOS 26 or later
@@ -40,7 +37,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/uchimanajet7/keel-tui",
-            from: "0.3.0"
+            from: "0.4.0"
         )
     ],
     targets: [
@@ -176,11 +173,7 @@ ScrollView(scrollbar: TerminalScrollbar(gutter: .stable, contentSpacing: 1)) {
 
 See the [scrolling guide](Sources/KeelTUI/KeelTUI.docc/Scrolling.md) for units,
 state ownership, layout order, low-level drawing and movement examples, zero-size
-behavior, and API migration. Height-only text/list slicing now saves the normalized
-offset and requires a mutable component; page movement uses the measured viewport.
-Version 0.3.0 also changes `TerminalModalLayout` construction and makes its metadata
-read-only. Review the guide's [migration notes](Sources/KeelTUI/KeelTUI.docc/Scrolling.md#migrating-from-020-to-030)
-when upgrading from 0.2.0.
+behavior, and [migration notes](Sources/KeelTUI/KeelTUI.docc/Scrolling.md#migrating-from-020-to-030).
 
 ## API documentation
 
